@@ -48,6 +48,7 @@
   }
   .touch h2 { margin: 0; font: 600 13px "Shippori Mincho", serif; letter-spacing: .14em; }
   .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .presets.comp { grid-template-columns: repeat(2, 1fr); }
   .presets button {
     border: 1px solid var(--line); background: transparent; color: var(--ink); border-radius: 8px;
     padding: 6px 4px; font: 12px "Shippori Mincho", serif; letter-spacing: .06em; cursor: pointer;
@@ -111,6 +112,11 @@
 <button id="export" type="button">GLB で保存</button>
 </div>
 <section class="touch" id="touch" aria-label="イラストのタッチ" hidden>
+  <h2>構図</h2>
+  <div class="presets comp" role="group" aria-label="構図">
+    <button type="button" data-comp="single" aria-pressed="true">一本</button>
+    <button type="button" data-comp="field" aria-pressed="false">群生</button>
+  </div>
   <h2>タッチ</h2>
   <div class="presets" role="group" aria-label="タッチのプリセット">
     <button type="button" data-touch="nihonga" aria-pressed="true">日本画</button>
@@ -1112,6 +1118,10 @@ const inkQuad = new FullScreenQuad(new THREE.ShaderMaterial({
       col *= 1.0 - edgeDarken * 0.5 * clamp(edge * 1.5, 0.0, 1.0);
 
       vec3 bg = paperColor * (1.0 + paperStrength * (paper - 0.5) * 0.6);
+      // 空気遠近: 遠い株ほど紙の色に溶け、線も淡くなる
+      float haze = smoothstep(45.0, 220.0, dC) * 0.6;
+      col = mix(col, bg, haze);
+      ink *= 1.0 - haze;
       vec3 outc = mix(bg, col, clamp(c.a, 0.0, 1.0));
 
       // 斜線 (暗い面) と交差線 (さらに暗い面)
@@ -1204,8 +1214,10 @@ const dust = (() => {
 })();
 cinema.add(dust);
 
-// 奥の群生と手前のボケ (初めてシネマを開いたときに生成)
-const companions = [];
+// 奥の群生 (シネマ、またはイラストの群生構図を初めて開いたときに生成)
+const field = new THREE.Group();
+field.visible = false;
+scene.add(field);
 let fieldBuilt = false;
 function buildField() {
   if (fieldBuilt) return;
@@ -1220,9 +1232,8 @@ function buildField() {
   for (const [x, z, h, d] of spots) {
     const p = buildPlant(h + rand(-2, 2), d, 0.06);
     p.position.set(top.x + x, 0, top.z + z);
-    p.userData.phase = rand(0, 10);
-    cinema.add(p);
-    companions.push(p);
+    field.add(p);
+    p.traverse((o) => { if (o.isMesh) meshes.push(o); });
   }
 }
 
@@ -1332,6 +1343,27 @@ function selectTouch(name) {
 presetButtons.forEach((b) => b.addEventListener('click', () => selectTouch(b.dataset.touch)));
 selectTouch('nihonga');
 
+let illustField = false;
+const compButtons = touchPanel.querySelectorAll('[data-comp]');
+function setComposition(name) {
+  illustField = name === 'field';
+  compButtons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.comp === name)));
+  if (mode === 'illust') {
+    applyFieldVisibility();
+    // 群生は見上げる広い構図、一本は花に寄った構図
+    controls.target.set(top.x, top.y + (illustField ? 2.5 : 1.5), top.z);
+    if (illustField) camera.position.set(top.x + 11, top.y - 1.5, top.z + 32);
+    else camera.position.set(top.x + 10, top.y - 1, top.z + 38);
+  }
+}
+compButtons.forEach((b) => b.addEventListener('click', () => setComposition(b.dataset.comp)));
+function applyFieldVisibility() {
+  const show = mode === 'cinema' || (mode === 'illust' && illustField);
+  if (show) buildField();
+  field.visible = show;
+  useMaterials(mode === 'illust' ? 'toon' : 'photo');
+}
+
 let mode = 'photo';
 const modeButtons = document.querySelectorAll('[data-mode]');
 function setMode(next) {
@@ -1345,8 +1377,8 @@ function setMode(next) {
   useMaterials(mode === 'illust' ? 'toon' : 'photo');
   ambient.intensity = mode === 'illust' ? 1.6 : 0;
   scene.environment = mode === 'illust' ? null : envTex;
-  if (isCinema) buildField();
   cinema.visible = isCinema;
+  applyFieldVisibility();
   studioLights.forEach((l) => { l.visible = !isCinema; });
   const t = isCinema ? cinemaTrans : studioTrans;
   transUniforms.uSunDir.value.copy(t.dir);
