@@ -1,6 +1,6 @@
 # 彼岸花 — Three.js
 
-Three.js（r160）で手続き的に生成したフォトリアルな彼岸花（*Lycoris radiata*）のシーンです。
+Three.js（r160）で手続き的に生成したフォトリアルな彼岸花（*Lycoris radiata*）一本のシーンです。
 
 `index.html` をブラウザで開くだけで動作します（Three.js は CDN から読み込み）。
 ローカルサーバー経由で開く場合: `python3 -m http.server` → http://localhost:8000

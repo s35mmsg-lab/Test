@@ -92,7 +92,7 @@ document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.5, 12000);
-camera.position.set(14, 47, 30);
+camera.position.set(9, 47, 21);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 43, 0);
@@ -617,7 +617,7 @@ const windUniform = { value: 0 };
   scene.add(new THREE.Mesh(hg, new THREE.MeshStandardMaterial({ color: 0x1f2b17, roughness: 1, side: THREE.BackSide })));
 }
 
-// ---------- 彼岸花の群生 ----------
+// ---------- 彼岸花 (一本) ----------
 const plants = [];
 function plant(x, z, h, detail, lean) {
   const p = buildPlant(h, detail, lean);
@@ -630,21 +630,6 @@ function plant(x, z, h, detail, lean) {
 }
 
 const hero = plant(0, 0, 42, 1, 0.03);
-// 主役の周りの株
-const near = [[-11, -6, 37], [9, -9, 46], [-4, -16, 40], [15, 4, 33], [-16, 6, 31], [5, -24, 44], [-22, -18, 38], [22, -18, 36], [1, 12, 26]];
-for (const [x, z, h] of near) plant(x + rand(-2, 2), z + rand(-2, 2), h + rand(-3, 3), 1, 0.06);
-// 奥へ広がる群生 (畦道沿いの帯)
-for (let i = 0; i < 46; i++) {
-  const t = rng();
-  const x = THREE.MathUtils.lerp(-260, 260, t) + rand(-25, 25);
-  const z = -40 - Math.abs(x) * 0.12 - rand(0, 120) - (rng() < 0.3 ? rand(60, 160) : 0);
-  plant(x, z, rand(32, 48), 0.5, 0.08);
-}
-for (let i = 0; i < 18; i++) {
-  const a = rand(-0.6, 0.6) + Math.PI * (rng() < 0.5 ? 0 : 1);
-  const r = rand(45, 120);
-  plant(Math.cos(a) * r, Math.sin(a) * r * 0.4 - 20, rand(30, 46), 0.5, 0.08);
-}
 
 const heroTop = hero.userData.top.clone().add(hero.position).add(new THREE.Vector3(0, 1.5, 0));
 controls.target.copy(heroTop);
@@ -654,7 +639,7 @@ const rt = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { 
 const composer = new EffectComposer(renderer, rt);
 composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 composer.addPass(new RenderPass(scene, camera));
-const bokeh = new BokehPass(scene, camera, { focus: 30, aperture: 0.00028, maxblur: 0.008 });
+const bokeh = new BokehPass(scene, camera, { focus: 30, aperture: 0.00022, maxblur: 0.008 });
 composer.addPass(bokeh);
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.14, 0.5, 0.95);
 composer.addPass(bloom);
