@@ -12,7 +12,14 @@
     --ink-dim: rgba(244, 233, 225, 0.62);
     --bg: #120806;
   }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); }
+  html, body { margin: 0; height: 100%; overflow: hidden; color: var(--ink);
+    background: radial-gradient(ellipse at 50% 40%, #3a302c 0%, #1a1513 55%, #0d0a09 100%); }
+  #export {
+    position: fixed; top: 20px; right: 20px; padding: 8px 16px; border-radius: 999px;
+    border: 1px solid rgba(244,233,225,.35); background: rgba(20,14,12,.5); color: var(--ink);
+    font: 13px system-ui, sans-serif; letter-spacing: .08em; cursor: pointer; backdrop-filter: blur(6px);
+  }
+  #export:hover { background: rgba(160,20,30,.55); }
   canvas { display: block; }
   .title {
     position: fixed; left: 28px; bottom: 26px; pointer-events: none;
@@ -51,17 +58,14 @@
   <h1>彼岸花</h1>
   <p>Lycoris radiata — 曼珠沙華</p>
 </div>
-<div class="hint">ドラッグ：回転　ホイール：ズーム<br>D：被写界深度　R：自動回転</div>
+<div class="hint">ドラッグ：回転　ホイール：ズーム　R：自動回転</div>
+<button id="export" type="button">GLB で保存</button>
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Sky } from 'three/addons/objects/Sky.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 // 単位: 1 = 1cm
@@ -81,82 +85,49 @@ const rand = (a, b) => a + (b - a) * rng();
 const UP = new THREE.Vector3(0, 1, 0);
 
 // ---------- レンダラー ----------
-const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.42;
+renderer.toneMappingExposure = 0.8;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.5, 12000);
-camera.position.set(9, 47, 21);
+const camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 1000);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 43, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
-controls.minDistance = 8;
-controls.maxDistance = 220;
-controls.maxPolarAngle = Math.PI * 0.53;
+controls.minDistance = 6;
+controls.maxDistance = 160;
 controls.autoRotate = true;
-controls.autoRotateSpeed = 0.35;
+controls.autoRotateSpeed = 0.8;
 
-// ---------- 空と環境光 ----------
-const sunElev = THREE.MathUtils.degToRad(11);
-const sunAzim = THREE.MathUtils.degToRad(-145);
-const sunDir = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - sunElev, sunAzim);
-
-const sky = new Sky();
-sky.scale.setScalar(9000);
-const su = sky.material.uniforms;
-su.turbidity.value = 6;
-su.rayleigh.value = 2.8;
-su.mieCoefficient.value = 0.004;
-su.mieDirectionalG.value = 0.84;
-su.sunPosition.value.copy(sunDir);
-scene.add(sky);
-
+// ---------- 環境光 (スタジオ) ----------
 const pmrem = new THREE.PMREMGenerator(renderer);
-const envScene = new THREE.Scene();
-const envSky = new Sky();
-envSky.scale.setScalar(1000);
-for (const k of Object.keys(su)) envSky.material.uniforms[k].value = su[k].value;
-envScene.add(envSky);
-// 地面からの照り返し
-const envGround = new THREE.Mesh(
-  new THREE.CircleGeometry(900, 32).rotateX(-Math.PI / 2),
-  new THREE.MeshBasicMaterial({ color: 0x2a3a14 })
-);
-envGround.position.y = -5;
-envScene.add(envGround);
-const envMap = pmrem.fromScene(envScene, 0.02).texture;
-scene.environment = envMap;
-
-scene.fog = new THREE.FogExp2(0xb8a28c, 0.00055);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
 
 // ---------- 光源 ----------
-const sunColor = new THREE.Color(0xffc690);
-const sun = new THREE.DirectionalLight(sunColor, 4.2);
-sun.position.copy(sunDir).multiplyScalar(300);
-sun.target.position.set(0, 25, 0);
+// キーライトはやや後方から当て、花弁の透け感を出す
+const sunDir = new THREE.Vector3(-0.55, 0.6, -0.6).normalize();
+const sunColor = new THREE.Color(0xfff0e0);
+const sun = new THREE.DirectionalLight(sunColor, 2.6);
+sun.position.copy(sunDir).multiplyScalar(80);
+sun.target.position.set(0, 38, 0);
 sun.castShadow = true;
-sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.mapSize.set(2048, 2048);
 const sc = sun.shadow.camera;
-sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 50; sc.far = 700;
-sun.shadow.bias = -0.0004;
-sun.shadow.normalBias = 0.03;
-sun.shadow.radius = 3;
+sc.left = -14; sc.right = 14; sc.top = 14; sc.bottom = -14; sc.near = 20; sc.far = 160;
+sun.shadow.bias = -0.0003;
+sun.shadow.normalBias = 0.02;
+sun.shadow.radius = 4;
 scene.add(sun, sun.target);
 
-const hemi = new THREE.HemisphereLight(0xaac4e6, 0x3b2a18, 0.55);
-scene.add(hemi);
-
-// 正面からの弱い補助光
-const fill = new THREE.DirectionalLight(0xffe2d0, 0.35);
-fill.position.set(30, 40, 60);
+const fill = new THREE.DirectionalLight(0xffffff, 1.0);
+fill.position.set(40, 50, 60);
 scene.add(fill);
 
 // ---------- 薄い花弁の透過光 (サブサーフェスの近似) ----------
@@ -275,19 +246,6 @@ const stemMap = canvasTex(128, 512, (g, w, h) => {
   grd.addColorStop(0.08, 'rgba(90,40,30,0)');
   g.fillStyle = grd; g.fillRect(0, 0, w, h);
 });
-
-const groundMap = canvasTex(512, 512, (g, w, h) => {
-  g.fillStyle = '#3c4a1f'; g.fillRect(0, 0, w, h);
-  for (let i = 0; i < 2600; i++) {
-    const r = rand(2, 14);
-    const c = rng();
-    g.fillStyle = c < 0.5 ? `rgba(70,95,30,${rand(0.15, 0.4)})`
-      : c < 0.8 ? `rgba(40,52,18,${rand(0.2, 0.5)})`
-      : `rgba(110,90,50,${rand(0.15, 0.35)})`;
-    g.beginPath(); g.ellipse(rng() * w, rng() * h, r, r * rand(0.3, 1), rng() * 3, 0, 6.29); g.fill();
-  }
-});
-groundMap.repeat.set(60, 60);
 
 // ---------- マテリアル ----------
 const petalMat = new THREE.MeshPhysicalMaterial({
@@ -549,132 +507,42 @@ function buildPlant(height, detail, seedLean) {
   return group;
 }
 
-// ---------- 地面と草 ----------
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(6000, 6000).rotateX(-Math.PI / 2),
-  new THREE.MeshStandardMaterial({ map: groundMap, roughness: 1, envMapIntensity: 0.5 })
-);
-ground.receiveShadow = true;
-scene.add(ground);
-
-const windUniform = { value: 0 };
-{
-  const blade = new THREE.PlaneGeometry(0.32, 1, 1, 5);
-  blade.translate(0, 0.5, 0);
-  const bp = blade.attributes.position;
-  for (let i = 0; i < bp.count; i++) {
-    const y = bp.getY(i);
-    bp.setX(i, bp.getX(i) * (1 - y * 0.92));
-    bp.setZ(i, y * y * 0.35);
-  }
-  blade.computeVertexNormals();
-
-  const grassMat = new THREE.MeshStandardMaterial({ roughness: 0.75, side: THREE.DoubleSide, envMapIntensity: 0.6 });
-  grassMat.onBeforeCompile = (shader) => {
-    shader.uniforms.uTime = windUniform;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uTime;')
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vec3 ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
-        float sway = sin(uTime * 1.4 + ip.x * 0.045 + ip.z * 0.03) * 0.6 + sin(uTime * 3.3 + ip.z * 0.11) * 0.18;
-        transformed.z += sway * position.y * position.y * 0.45;`);
-  };
-
-  const COUNT = 70000;
-  const grass = new THREE.InstancedMesh(blade, grassMat, COUNT);
-  const dummy = new THREE.Object3D();
-  const col = new THREE.Color();
-  for (let i = 0; i < COUNT; i++) {
-    const r = 320 * Math.pow(rng(), 1.35);
-    const a = rng() * Math.PI * 2;
-    dummy.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
-    dummy.rotation.set(rand(-0.2, 0.2), rng() * Math.PI * 2, rand(-0.2, 0.2));
-    const h = rand(5, 17) * (r < 12 ? 0.75 : 1);
-    dummy.scale.set(rand(0.8, 1.4), h, rand(0.6, 1.2) * h * 0.08);
-    dummy.updateMatrix();
-    grass.setMatrixAt(i, dummy.matrix);
-    const c = rng();
-    col.setHSL(c < 0.82 ? rand(0.2, 0.28) : rand(0.1, 0.14), rand(0.35, 0.6), rand(0.16, 0.3));
-    grass.setColorAt(i, col);
-  }
-  grass.receiveShadow = true;
-  scene.add(grass);
-}
-
-// 遠景の山並み (霧に溶ける)
-{
-  const hg = new THREE.CylinderGeometry(2600, 2600, 1, 160, 1, true);
-  const hp = hg.attributes.position;
-  for (let i = 0; i < hp.count; i++) {
-    const x = hp.getX(i), z = hp.getZ(i);
-    if (hp.getY(i) > 0) {
-      const a = Math.atan2(z, x);
-      const h = 110 + 70 * Math.sin(a * 3.1 + 1) + 45 * Math.sin(a * 7.7 + 2) + 18 * Math.sin(a * 17.3);
-      hp.setY(i, h);
-    } else hp.setY(i, -10);
-  }
-  hg.computeVertexNormals();
-  scene.add(new THREE.Mesh(hg, new THREE.MeshStandardMaterial({ color: 0x1f2b17, roughness: 1, side: THREE.BackSide })));
-}
-
 // ---------- 彼岸花 (一本) ----------
-const plants = [];
-function plant(x, z, h, detail, lean) {
-  const p = buildPlant(h, detail, lean);
-  p.position.set(x, 0, z);
-  p.userData.phase = rand(0, 10);
-  p.userData.amp = rand(0.6, 1.2);
-  scene.add(p);
-  plants.push(p);
-  return p;
-}
-
-const hero = plant(0, 0, 42, 1, 0.03);
-
-const heroTop = hero.userData.top.clone().add(hero.position).add(new THREE.Vector3(0, 1.5, 0));
-controls.target.copy(heroTop);
-
-// ---------- ポストプロセス ----------
-const rt = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: 4 });
-const composer = new EffectComposer(renderer, rt);
-composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-composer.addPass(new RenderPass(scene, camera));
-const bokeh = new BokehPass(scene, camera, { focus: 30, aperture: 0.00022, maxblur: 0.008 });
-composer.addPass(bokeh);
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.14, 0.5, 0.95);
-composer.addPass(bloom);
-composer.addPass(new OutputPass());
+const lily = buildPlant(42, 1, 0.03);
+lily.name = 'Lycoris_radiata';
+scene.add(lily);
+const top = lily.userData.top;
+controls.target.set(top.x, top.y + 1.5, top.z);
+camera.position.set(top.x + 10, top.y + 4, top.z + 22);
 
 // ---------- 入力 ----------
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'd' || e.key === 'D') bokeh.enabled = !bokeh.enabled;
   if (e.key === 'r' || e.key === 'R') controls.autoRotate = !controls.autoRotate;
 });
 controls.addEventListener('start', () => { controls.autoRotate = false; });
+
+// GLB として書き出し
+document.getElementById('export').addEventListener('click', () => {
+  new GLTFExporter().parse(lily, (glb) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([glb], { type: 'model/gltf-binary' }));
+    a.download = 'higanbana.glb';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }, (err) => console.error(err), { binary: true });
+});
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ---------- アニメーション ----------
-const clock = new THREE.Clock();
-function frame() {
-  const t = clock.getElapsedTime();
-  windUniform.value = t;
-  for (const p of plants) {
-    const ph = p.userData.phase, a = p.userData.amp;
-    p.rotation.z = (Math.sin(t * 0.9 + ph) * 0.011 + Math.sin(t * 2.3 + ph * 1.7) * 0.003) * a;
-    p.rotation.x = (Math.sin(t * 0.7 + ph * 0.6) * 0.008) * a;
-  }
+// ---------- 描画 ----------
+renderer.setAnimationLoop(() => {
   controls.update();
-  bokeh.uniforms.focus.value = camera.position.distanceTo(controls.target);
-  composer.render();
-  requestAnimationFrame(frame);
-}
-frame();
+  renderer.render(scene, camera);
+});
 requestAnimationFrame(() => document.getElementById('loading').classList.add('done'));
 </script>
 </body>
