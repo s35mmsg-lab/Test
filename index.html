@@ -739,11 +739,12 @@ function buildFlower(G, F, A, detail) {
     const radial = e1.clone().multiplyScalar(Math.cos(psi)).addScaledVector(e2, Math.sin(psi));
     // 横方向に扇状に開き、上下の開きは小さい
     const fan = isStyle ? 0 : (i - 2.5) / 2.5;
-    const dir0 = A.clone().addScaledVector(UP, rand(0.0, 0.22))
-      .addScaledVector(lateral, fan * rand(0.28, 0.5)).normalize();
+    // ほぼ水平に扇状に開く。一部はやや下を向く
+    const dir0 = A.clone().addScaledVector(UP, isStyle ? 0.05 : rand(-0.2, 0.12))
+      .addScaledVector(lateral, fan * rand(0.35, 0.6)).normalize();
     const start = F.clone().addScaledVector(A, 0.15).addScaledVector(radial, isStyle ? 0 : 0.05);
-    const len = isStyle ? rand(8.8, 9.6) : rand(7.6, 9.2);
-    const { pts, dir } = filamentPoints(start, dir0, len, isStyle ? 0.25 : rand(0.15, 0.4), isStyle ? 0.9 : rand(1.0, 1.7), 30);
+    const len = isStyle ? rand(9.6, 10.6) : rand(8.4, 10.4);
+    const { pts, dir } = filamentPoints(start, dir0, len, isStyle ? 0.08 : rand(0.0, 0.2), isStyle ? 0.6 : rand(0.45, 0.95), 30);
     const { geo } = taperTube(pts, isStyle ? 0.032 : 0.028, isStyle ? 0.02 : 0.017, tub, rad);
     const tip = pts[pts.length - 1];
     if (isStyle) {
@@ -801,7 +802,7 @@ function buildPlant(height, detail, seedLean) {
   for (let k = 0; k < n; k++) {
     const phi = rot + k / n * Math.PI * 2 + rand(-0.25, 0.25);
     const out = new THREE.Vector3(Math.cos(phi), 0, Math.sin(phi));
-    const tilt = rand(1.25, 1.5);
+    const tilt = rand(1.35, 1.62);
     const A = out.clone().multiplyScalar(Math.sin(tilt)).addScaledVector(UP, Math.cos(tilt)).normalize();
     const pl = rand(1.6, 2.4);
     const F = top.clone().addScaledVector(UP, 0.5).addScaledVector(out, 0.35).addScaledVector(A, pl);
@@ -843,7 +844,7 @@ lily.name = 'Lycoris_radiata';
 scene.add(lily);
 const top = lily.userData.top;
 controls.target.set(top.x, top.y + 1.5, top.z);
-camera.position.set(top.x + 8, top.y - 1, top.z + 26);
+camera.position.set(top.x + 9, top.y - 1, top.z + 32);
 
 // ---------- 入力 ----------
 window.addEventListener('keydown', (e) => {
@@ -1152,7 +1153,7 @@ function setMode(next) {
   // シネマに入るときは見上げる構図に
   if (isCinema && prev !== 'cinema') {
     controls.target.set(top.x, top.y + 2.5, top.z);
-    camera.position.set(top.x + 9, top.y - 1.5, top.z + 22);
+    camera.position.set(top.x + 10, top.y - 1.5, top.z + 27);
   }
 }
 modeButtons.forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
