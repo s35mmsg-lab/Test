@@ -537,7 +537,7 @@ const smooth = (a, b, x) => { const t = THREE.MathUtils.clamp((x - a) / (b - a),
 // 花被片 (ローカル座標: +X 外向き, +Y 花の軸, Z 幅方向)
 function makeTepal(o) {
   const { length, width, rise, curl, wave, waveFreq, twist, cup, segU, segV, phaseA, phaseB } = o;
-  const tone = o.tone ?? 1;
+  const tone = o.tone ?? 1, sweep = o.sweep ?? 0, roll = o.roll ?? 0;
   const cols = o.atlas === undefined ? 1 : ATLAS, col0 = o.atlas ?? 0;
   const pos = [], nor = [], uv = [], idx = [], col = [];
   const ds = length / segU;
@@ -550,11 +550,20 @@ function makeTepal(o) {
     C.push(p.clone()); T.push(t);
     p.addScaledVector(t, ds);
   }
+  // 放射面から横へそれる曲がり。接線は差分から取り直す
+  if (sweep !== 0) {
+    for (let i = 0; i <= segU; i++) C[i].z += sweep * length * Math.pow(i / segU, 2);
+    for (let i = 0; i <= segU; i++) {
+      const a = C[Math.max(0, i - 1)], b = C[Math.min(segU, i + 1)];
+      T[i].subVectors(b, a).normalize();
+    }
+  }
   const B = new THREE.Vector3(), N = new THREE.Vector3(), q = new THREE.Quaternion(), v3 = new THREE.Vector3();
   for (let i = 0; i <= segU; i++) {
     const u = i / segU;
     const w = width * Math.pow(Math.sin(Math.PI * (0.05 + 0.95 * u)), 0.55) * (1 - 0.3 * u);
-    B.set(0, 0, 1).applyQuaternion(q.setFromAxisAngle(T[i], twist * u));
+    B.set(0, 0, 1).addScaledVector(T[i], -T[i].z).normalize()
+      .applyQuaternion(q.setFromAxisAngle(T[i], roll + twist * u));
     N.crossVectors(B, T[i]).normalize();
     const amp = wave * smooth(0.06, 0.3, u) * (1 - 0.45 * u);
     for (let j = 0; j <= segV; j++) {
@@ -669,14 +678,19 @@ function perpendicular(v) {
   return new THREE.Vector3().crossVectors(v, a).normalize();
 }
 
-// 雄しべ・雌しべの軌跡 (前方に伸び、上方へ反り上がる)
-function filamentPoints(start, dir0, target, len, bend, steps) {
+// 雄しべ・雌しべの軌跡: 根元から緩やかに上がり、先端側の3〜4割で強く反り上がる
+const qRot = new THREE.Quaternion();
+function filamentPoints(start, dir0, len, baseCurl, tipCurl, steps) {
   const pts = [start.clone()];
   const p = start.clone(), d = dir0.clone();
+  const axis = new THREE.Vector3().crossVectors(dir0, UP);
+  if (axis.lengthSq() < 1e-4) axis.set(1, 0, 0); else axis.normalize();
   const ds = len / steps;
   for (let i = 1; i <= steps; i++) {
-    const s = i / steps;
-    d.lerp(target, bend * (0.4 + 1.2 * s) / steps * 6).normalize();
+    const s = (i - 0.5) / steps;
+    // 先端に集中する曲率 (s^3 の重みは 0〜1 で積分すると 1)
+    const dTheta = (baseCurl + tipCurl * 4 * s * s * s) / steps;
+    d.applyQuaternion(qRot.setFromAxisAngle(axis, dTheta)).normalize();
     p.addScaledVector(d, ds);
     pts.push(p.clone());
   }
@@ -692,26 +706,32 @@ function buildFlower(G, F, A, detail) {
   G.green.push(ellipsoid(ovaryGeo, F.clone().addScaledVector(A, -0.12), e1, A, e2, 1, 1, 1));
 
   // 花被片 ×6
+  // 花の上側 (空の方向) を基準に、上の花被片ほど強く反り返り、下の花被片は垂れる
+  const flowerUp = UP.clone().addScaledVector(A, -UP.dot(A));
+  if (flowerUp.lengthSq() < 1e-4) flowerUp.copy(e1); else flowerUp.normalize();
   const rot0 = rand(0, Math.PI * 2);
   for (let i = 0; i < 6; i++) {
-    const phi = rot0 + i / 6 * Math.PI * 2 + rand(-0.15, 0.15);
+    const phi = rot0 + i / 6 * Math.PI * 2 + rand(-0.4, 0.4);
     const X = e1.clone().multiplyScalar(Math.cos(phi)).addScaledVector(e2, Math.sin(phi));
     const Z = new THREE.Vector3().crossVectors(X, A);
+    const side = X.dot(flowerUp);
+    const wild = rng() < 0.2;
     const tep = makeTepal({
-      length: rand(3.8, 4.6), width: rand(0.36, 0.46),
-      rise: rand(0.7, 1.0), curl: rand(3.6, 4.5),
-      wave: rand(0.07, 0.12), waveFreq: rand(6.5, 9.5), twist: rand(-0.5, 0.5),
-      cup: rand(0.18, 0.32), segU, segV, phaseA: rand(0, 6.28), phaseB: rand(0, 6.28), tone: rand(0.9, 1.06),
+      length: rand(3.4, 4.9), width: rand(0.38, 0.58),
+      rise: rand(0.4, 1.05) + 0.25 * side, curl: rand(2.8, 4.6) + 0.55 * side,
+      wave: rand(0.06, 0.13), waveFreq: rand(6, 10),
+      twist: wild ? rand(1.2, 1.8) * (rng() < 0.5 ? -1 : 1) : rand(-0.9, 0.9),
+      roll: rand(-0.6, 0.6), sweep: rand(-0.35, 0.35),
+      cup: rand(0.12, 0.36), segU, segV, phaseA: rand(0, 6.28), phaseB: rand(0, 6.28), tone: rand(0.9, 1.06),
       atlas: rng() < 0.12 ? 3 : Math.floor(rng() * 3),
     });
-    m4.makeBasis(X, A, Z).setPosition(F.clone().addScaledVector(A, 0.05).addScaledVector(X, 0.06));
+    m4.makeBasis(X, A, Z).setPosition(F.clone().addScaledVector(A, rand(0.0, 0.14)).addScaledVector(X, rand(0.03, 0.12)));
     G.petal.push(tep.applyMatrix4(m4));
   }
 
   // 雄しべ ×6 と 雌しべ ×1
   const horiz = new THREE.Vector3(A.x, 0, A.z).normalize();
   const lateral = new THREE.Vector3().crossVectors(UP, horiz).normalize();
-  const target = UP.clone().addScaledVector(horiz, 0.35).normalize();
   const tub = detail > 0.7 ? 56 : 14, rad = detail > 0.7 ? 8 : 4;
   for (let i = 0; i <= 6; i++) {
     const isStyle = i === 6;
@@ -719,11 +739,11 @@ function buildFlower(G, F, A, detail) {
     const radial = e1.clone().multiplyScalar(Math.cos(psi)).addScaledVector(e2, Math.sin(psi));
     // 横方向に扇状に開き、上下の開きは小さい
     const fan = isStyle ? 0 : (i - 2.5) / 2.5;
-    const dir0 = A.clone().addScaledVector(UP, rand(-0.02, 0.12))
-      .addScaledVector(lateral, fan * rand(0.3, 0.45)).normalize();
+    const dir0 = A.clone().addScaledVector(UP, rand(0.0, 0.22))
+      .addScaledVector(lateral, fan * rand(0.28, 0.5)).normalize();
     const start = F.clone().addScaledVector(A, 0.15).addScaledVector(radial, isStyle ? 0 : 0.05);
     const len = isStyle ? rand(8.8, 9.6) : rand(7.6, 9.2);
-    const { pts, dir } = filamentPoints(start, dir0, target, len, isStyle ? 0.1 : rand(0.08, 0.17), 18);
+    const { pts, dir } = filamentPoints(start, dir0, len, isStyle ? 0.25 : rand(0.15, 0.4), isStyle ? 0.9 : rand(1.0, 1.7), 30);
     const { geo } = taperTube(pts, isStyle ? 0.032 : 0.028, isStyle ? 0.02 : 0.017, tub, rad);
     const tip = pts[pts.length - 1];
     if (isStyle) {
@@ -776,7 +796,7 @@ function buildPlant(height, detail, seedLean) {
   }
 
   // 散形花序 5〜7輪
-  const n = 5 + Math.floor(rng() * 3);
+  const n = 6 + Math.floor(rng() * 3);
   const rot = rand(0, Math.PI * 2);
   for (let k = 0; k < n; k++) {
     const phi = rot + k / n * Math.PI * 2 + rand(-0.25, 0.25);
@@ -1055,7 +1075,7 @@ function buildField() {
   fieldBuilt = true;
   const spots = [
     [-13, -9, 36, 1], [12, -15, 46, 1], [-5, -27, 40, 0.5], [21, -5, 33, 0.5], [-24, -20, 44, 0.5],
-    [9, 13, 33, 0.5], [-17, 9, 30, 0.5],
+    [-20, 4, 30, 0.5],
   ];
   for (let i = 0; i < 26; i++) {
     spots.push([rand(-110, 110), rand(-45, -160), rand(32, 48), 0.5]);
@@ -1077,7 +1097,7 @@ allPhotoMats.forEach((m) => { m.userData.envBase = m.envMapIntensity; });
 // ポストプロセス: 被写界深度 → ブルーム → 色調 (寒色の影、ビネット、粒子) → 出力
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
 composer.addPass(new RenderPass(scene, camera));
-const bokeh = new BokehPass(scene, camera, { focus: 26, aperture: 0.0007, maxblur: 0.012 });
+const bokeh = new BokehPass(scene, camera, { focus: 26, aperture: 0.0005, maxblur: 0.012 });
 composer.addPass(bokeh);
 const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.42, 0.55, 0.85);
 composer.addPass(bloom);
