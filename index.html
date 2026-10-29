@@ -75,10 +75,11 @@
   <h1>彼岸花</h1>
   <p>Lycoris radiata — 曼珠沙華</p>
 </div>
-<div class="hint">ドラッグ：回転　ホイール：ズーム<br>R：自動回転　I：イラスト切替</div>
+<div class="hint">ドラッグ：回転　ホイール：ズーム<br>1 / 2 / 3：シネマ・スタジオ・イラスト　R：自動回転</div>
 <div class="toolbar">
   <div class="mode" role="group" aria-label="表示スタイル">
-    <button type="button" data-mode="photo" aria-pressed="true">写実</button>
+    <button type="button" data-mode="cinema" aria-pressed="true">シネマ</button>
+    <button type="button" data-mode="photo" aria-pressed="false">スタジオ</button>
     <button type="button" data-mode="illust" aria-pressed="false">イラスト</button>
   </div>
 <button id="export" type="button">GLB で保存</button>
@@ -89,6 +90,12 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -159,6 +166,8 @@ scene.add(fill);
 const rim = new THREE.DirectionalLight(0xffd9c4, 1.4);
 rim.position.set(30, 55, -50);
 scene.add(rim);
+
+const studioLights = [sun, fill, rim];
 
 // ---------- 薄い花弁の透過光 (サブサーフェスの近似) ----------
 const transUniforms = {
@@ -493,7 +502,7 @@ const stemRough = canvasTex(64, 256, (g, w, h) => {
 const petalMat = new THREE.MeshPhysicalMaterial({
   map: petalMap, bumpMap: petalBump, bumpScale: 1.4, vertexColors: true,
   roughnessMap: petalRough, roughness: 0.68, sheen: 1, sheenRoughness: 0.32, sheenColor: new THREE.Color(0xff3b3b), sheenColorMap: petalMap,
-  clearcoat: 0.12, clearcoatRoughness: 0.45, side: THREE.DoubleSide, envMapIntensity: 0.9,
+  clearcoat: 0.35, clearcoatRoughness: 0.22, side: THREE.DoubleSide, envMapIntensity: 0.9,
 });
 addTranslucency(petalMat, 0.36, 0xff1a1a, true);
 
@@ -714,7 +723,7 @@ function buildFlower(G, F, A, detail) {
       .addScaledVector(lateral, fan * rand(0.3, 0.45)).normalize();
     const start = F.clone().addScaledVector(A, 0.15).addScaledVector(radial, isStyle ? 0 : 0.05);
     const len = isStyle ? rand(8.8, 9.6) : rand(7.6, 9.2);
-    const { pts, dir } = filamentPoints(start, dir0, target, len, isStyle ? 0.08 : rand(0.05, 0.12), 18);
+    const { pts, dir } = filamentPoints(start, dir0, target, len, isStyle ? 0.1 : rand(0.08, 0.17), 18);
     const { geo } = taperTube(pts, isStyle ? 0.032 : 0.028, isStyle ? 0.02 : 0.017, tub, rad);
     const tip = pts[pts.length - 1];
     if (isStyle) {
@@ -973,24 +982,187 @@ window.addEventListener('resize', resizeTargets);
 const ambient = new THREE.HemisphereLight(0xfff4ea, 0x8a6a60, 0);
 scene.add(ambient);
 
+// ---------- シネマモード ----------
+// 夜の濃紺の空、逆光で透ける花、奥の群生のボケ、光る葯と浮遊する塵
+const cinema = new THREE.Group();
+cinema.visible = false;
+scene.add(cinema);
+
+// 背景: 上は黒、地平は濃紺、足元は赤い群生の照り返し
+const backdrop = new THREE.Mesh(
+  new THREE.SphereGeometry(600, 48, 24),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: {
+      cTop: { value: new THREE.Color(0x01030a) }, cMid: { value: new THREE.Color(0x1a3c80) },
+      cLow: { value: new THREE.Color(0x3a0610) },
+    },
+    vertexShader: `varying vec3 vDir; void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `uniform vec3 cTop, cMid, cLow; varying vec3 vDir; void main() {
+      float y = vDir.y;
+      vec3 c = mix(cMid, cTop, smoothstep(0.05, 0.8, y));
+      c = mix(cLow, c, smoothstep(-0.25, 0.04, y));
+      gl_FragColor = vec4(c, 1.0);
+      #include <colorspace_fragment>
+    }`,
+  })
+);
+backdrop.material.uniforms.cTop.value.convertSRGBToLinear();
+backdrop.material.uniforms.cMid.value.convertSRGBToLinear();
+backdrop.material.uniforms.cLow.value.convertSRGBToLinear();
+backdrop.position.copy(top);
+cinema.add(backdrop);
+
+// 照明: 背後上方からの青白い月光 (縁取りと透過)、正面上からの白いキー、足元の赤い照り返し
+const moonDir = new THREE.Vector3(-0.35, 0.55, -0.75).normalize();
+const moon = new THREE.DirectionalLight(0xc4d8ff, 3.2);
+moon.position.copy(top).addScaledVector(moonDir, 80);
+moon.target.position.copy(top);
+const key = new THREE.SpotLight(0xfff1e6, 5, 0, 0.42, 0.85, 0);
+key.position.set(top.x + 26, top.y + 38, top.z + 30);
+key.target.position.copy(top);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.bias = -0.0004;
+key.shadow.normalBias = 0.02;
+const bounce = new THREE.HemisphereLight(0x1a3060, 0x8a0c10, 0.9);
+cinema.add(moon, moon.target, key, key.target, bounce);
+
+// 浮遊する塵 (ボケて光の粒になる)
+const dust = (() => {
+  const N = 380, pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    pos[i * 3] = top.x + rand(-40, 40); pos[i * 3 + 1] = top.y + rand(-14, 26); pos[i * 3 + 2] = top.z + rand(-50, 25);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const dot = canvasTex(64, 64, (c, w, h) => {
+    const r = c.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
+    r.addColorStop(0, 'rgba(255,240,220,1)'); r.addColorStop(0.4, 'rgba(255,220,190,0.35)'); r.addColorStop(1, 'rgba(255,220,190,0)');
+    c.fillStyle = r; c.fillRect(0, 0, w, h);
+  });
+  return new THREE.Points(g, new THREE.PointsMaterial({
+    map: dot, size: 0.35, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: 0xffe2c8,
+  }));
+})();
+cinema.add(dust);
+
+// 奥の群生と手前のボケ (初めてシネマを開いたときに生成)
+const companions = [];
+let fieldBuilt = false;
+function buildField() {
+  if (fieldBuilt) return;
+  fieldBuilt = true;
+  const spots = [
+    [-13, -9, 36, 1], [12, -15, 46, 1], [-5, -27, 40, 0.5], [21, -5, 33, 0.5], [-24, -20, 44, 0.5],
+    [9, 13, 33, 0.5], [-17, 9, 30, 0.5],
+  ];
+  for (let i = 0; i < 26; i++) {
+    spots.push([rand(-110, 110), rand(-45, -160), rand(32, 48), 0.5]);
+  }
+  for (const [x, z, h, d] of spots) {
+    const p = buildPlant(h + rand(-2, 2), d, 0.06);
+    p.position.set(top.x + x, 0, top.z + z);
+    p.userData.phase = rand(0, 10);
+    cinema.add(p);
+    companions.push(p);
+  }
+}
+
+const cinemaTrans = { dir: moonDir.clone(), color: new THREE.Color(0xc4d8ff).multiplyScalar(5.5) };
+const studioTrans = { dir: transUniforms.uSunDir.value.clone(), color: transUniforms.uSunColor.value.clone() };
+const allPhotoMats = [petalMat, stamenMat, styleMat, antherMat, stigmaMat, stemMat, ovaryMat, bractMat];
+allPhotoMats.forEach((m) => { m.userData.envBase = m.envMapIntensity; });
+
+// ポストプロセス: 被写界深度 → ブルーム → 色調 (寒色の影、ビネット、粒子) → 出力
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.addPass(new RenderPass(scene, camera));
+const bokeh = new BokehPass(scene, camera, { focus: 26, aperture: 0.0007, maxblur: 0.012 });
+composer.addPass(bokeh);
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.42, 0.55, 0.85);
+composer.addPass(bloom);
+const grade = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, time: { value: 0 } },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float time; varying vec2 vUv;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main() {
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = mix(vec3(l), c, 1.12);
+      c *= mix(vec3(0.82, 0.93, 1.18), vec3(1.0), smoothstep(0.0, 0.35, l));
+      float d = distance(vUv, vec2(0.5));
+      c *= mix(1.0, 0.35, smoothstep(0.4, 0.9, d));
+      c += (hash(vUv * 1000.0 + time) - 0.5) * 0.018 * (0.4 + l);
+      gl_FragColor = vec4(max(c, 0.0), 1.0);
+    }`,
+});
+composer.addPass(grade);
+composer.addPass(new OutputPass());
+function resizeComposer() {
+  composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  composer.setSize(window.innerWidth, window.innerHeight);
+}
+resizeComposer();
+window.addEventListener('resize', resizeComposer);
+
 let mode = 'photo';
 const modeButtons = document.querySelectorAll('[data-mode]');
 function setMode(next) {
+  const prev = mode;
   mode = next;
+  const isCinema = mode === 'cinema';
   document.body.classList.toggle('illust', mode === 'illust');
+  document.body.classList.toggle('cinema', isCinema);
   modeButtons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
   useMaterials(mode === 'illust' ? 'toon' : 'photo');
   ambient.intensity = mode === 'illust' ? 1.6 : 0;
   scene.environment = mode === 'illust' ? null : envTex;
+  if (isCinema) buildField();
+  cinema.visible = isCinema;
+  studioLights.forEach((l) => { l.visible = !isCinema; });
+  const t = isCinema ? cinemaTrans : studioTrans;
+  transUniforms.uSunDir.value.copy(t.dir);
+  transUniforms.uSunColor.value.copy(t.color);
+  allPhotoMats.forEach((m) => { m.envMapIntensity = m.userData.envBase * (isCinema ? 0.3 : 1); });
+  antherMat.emissive.set(isCinema ? 0x7a5520 : 0x000000);
+  stigmaMat.emissive.set(isCinema ? 0x221010 : 0x000000);
+  renderer.toneMappingExposure = isCinema ? 1.0 : 0.8;
+  if (!isCinema) lily.rotation.set(0, 0, 0);
+  // シネマに入るときは見上げる構図に
+  if (isCinema && prev !== 'cinema') {
+    controls.target.set(top.x, top.y + 2.5, top.z);
+    camera.position.set(top.x + 9, top.y - 1.5, top.z + 22);
+  }
 }
 modeButtons.forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'i' || e.key === 'I') setMode(mode === 'illust' ? 'photo' : 'illust');
+  if (e.key === '1') setMode('cinema');
+  if (e.key === '2') setMode('photo');
+  if (e.key === '3' || e.key === 'i' || e.key === 'I') setMode('illust');
 });
+setMode('cinema');
 
 // ---------- 描画 ----------
+const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   controls.update();
+  if (mode === 'cinema') {
+    const t = clock.getElapsedTime();
+    // そよ風
+    lily.rotation.z = Math.sin(t * 0.8) * 0.006;
+    lily.rotation.x = Math.sin(t * 0.6 + 1) * 0.004;
+    for (const p of companions) {
+      p.rotation.z = Math.sin(t * 0.8 + p.userData.phase) * 0.01;
+      p.rotation.x = Math.sin(t * 0.6 + p.userData.phase * 0.7) * 0.007;
+    }
+    dust.rotation.y = t * 0.01;
+    dust.position.y = Math.sin(t * 0.3) * 0.6;
+    bokeh.uniforms.focus.value = camera.position.distanceTo(controls.target);
+    grade.uniforms.time.value = t % 100;
+    composer.render();
+    return;
+  }
   if (mode !== 'illust') {
     renderer.render(scene, camera);
     return;
