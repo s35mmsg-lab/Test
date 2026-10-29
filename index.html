@@ -10,17 +10,34 @@
   :root {
     --ink: #f4e9e1;
     --ink-dim: rgba(244, 233, 225, 0.62);
+    --line: rgba(244, 233, 225, 0.35);
+    --chip: rgba(20, 14, 12, 0.5);
+    --accent: #b3121f;
     --bg: #120806;
   }
   html, body { margin: 0; height: 100%; overflow: hidden; color: var(--ink);
     background: radial-gradient(ellipse at 50% 40%, #3a302c 0%, #1a1513 55%, #0d0a09 100%); }
+  .toolbar {
+    position: fixed; top: calc(20px + env(safe-area-inset-top, 0px)); right: calc(20px + env(safe-area-inset-right, 0px));
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end;
+  }
+  .mode { display: flex; padding: 3px; border-radius: 999px; border: 1px solid var(--line); background: var(--chip); backdrop-filter: blur(6px); }
+  .mode button {
+    border: 0; background: transparent; color: var(--ink-dim); padding: 6px 14px; border-radius: 999px;
+    font: 13px "Shippori Mincho", serif; letter-spacing: .12em; cursor: pointer;
+  }
+  .mode button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .mode button:focus-visible, #export:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #export {
-    position: fixed; top: 20px; right: 20px; padding: 8px 16px; border-radius: 999px;
-    border: 1px solid rgba(244,233,225,.35); background: rgba(20,14,12,.5); color: var(--ink);
+    padding: 8px 16px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--chip); color: var(--ink);
     font: 13px system-ui, sans-serif; letter-spacing: .08em; cursor: pointer; backdrop-filter: blur(6px);
   }
   #export:hover { background: rgba(160,20,30,.55); }
   canvas { display: block; }
+  /* イラスト調では和紙の上に墨色の文字 */
+  body.illust { --ink: #3a1a12; --ink-dim: rgba(58, 26, 18, 0.7); --line: rgba(58, 26, 18, 0.3); --chip: rgba(243, 234, 216, 0.6); }
+  body.illust .title, body.illust .hint { text-shadow: none; }
   .title {
     position: fixed; left: 28px; bottom: 26px; pointer-events: none;
     font-family: "Shippori Mincho", serif; text-shadow: 0 1px 12px rgba(0,0,0,.55);
@@ -58,13 +75,20 @@
   <h1>彼岸花</h1>
   <p>Lycoris radiata — 曼珠沙華</p>
 </div>
-<div class="hint">ドラッグ：回転　ホイール：ズーム　R：自動回転</div>
+<div class="hint">ドラッグ：回転　ホイール：ズーム<br>R：自動回転　I：イラスト切替</div>
+<div class="toolbar">
+  <div class="mode" role="group" aria-label="表示スタイル">
+    <button type="button" data-mode="photo" aria-pressed="true">写実</button>
+    <button type="button" data-mode="illust" aria-pressed="false">イラスト</button>
+  </div>
 <button id="export" type="button">GLB で保存</button>
+</div>
 
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
@@ -108,7 +132,8 @@ controls.autoRotateSpeed = 0.8;
 
 // ---------- 環境光 (スタジオ) ----------
 const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+const envTex = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+scene.environment = envTex;
 
 // ---------- 光源 ----------
 // キーライトはやや後方から当て、花弁の透け感を出す
@@ -254,6 +279,16 @@ const stemMap = canvasTex(128, 512, (g, w, h) => {
     g.fillStyle = `rgba(${l > 0 ? 200 : 20},${l > 0 ? 230 : 50},${l > 0 ? 160 : 10},${Math.abs(l) / 100})`;
     g.fillRect(rng() * w, 0, rand(1, 4), h);
   }
+  // 気孔の細かな点
+  for (let i = 0; i < 2500; i++) {
+    g.fillStyle = `rgba(200,220,170,${rand(0.08, 0.3)})`;
+    g.fillRect(rng() * w, rng() * h, 1, 2);
+  }
+  // 粉を吹いたような薄いブルーム
+  for (let i = 0; i < 40; i++) {
+    g.fillStyle = `rgba(190,205,180,${rand(0.04, 0.12)})`;
+    g.beginPath(); g.ellipse(rng() * w, rng() * h, rand(4, 14), rand(20, 70), 0, 0, 6.29); g.fill();
+  }
   // 基部は赤紫がかる
   const grd = g.createLinearGradient(0, h, 0, 0);
   grd.addColorStop(0, 'rgba(90,40,30,0.55)');
@@ -288,34 +323,103 @@ const stemBump = canvasTex(128, 512, (g, w, h) => {
   }
 }, false);
 
+// 雄しべ・雌しべ: 長さ方向 (下が基部) に、基部は淡く先端は濃い。細い縦筋入り
+const filamentMap = canvasTex(32, 512, (g, w, h) => {
+  const grd = g.createLinearGradient(0, h, 0, 0);
+  grd.addColorStop(0, '#f2b8b0');
+  grd.addColorStop(0.07, '#e04050');
+  grd.addColorStop(0.2, '#d4121f');
+  grd.addColorStop(0.85, '#c80e1c');
+  grd.addColorStop(1, '#9c0a16');
+  g.fillStyle = grd; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 18; i++) {
+    g.fillStyle = rng() < 0.5 ? `rgba(255,120,120,${rand(0.08, 0.2)})` : `rgba(80,0,10,${rand(0.08, 0.2)})`;
+    g.fillRect(rng() * w, 0, rand(1, 2.5), h);
+  }
+  const img = g.getImageData(0, 0, w, h);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (rng() - 0.5) * 10;
+    img.data[i] += n; img.data[i + 1] += n * 0.4; img.data[i + 2] += n * 0.4;
+  }
+  g.putImageData(img, 0, 0);
+});
+
+// 子房・花柄: まだらな緑に細かな気孔の斑点と縦筋
+const greenMap = canvasTex(256, 256, (g, w, h) => {
+  g.fillStyle = '#6a8a2c'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 160; i++) {
+    const r = rand(6, 26);
+    g.fillStyle = rng() < 0.5 ? `rgba(150,180,70,${rand(0.08, 0.2)})` : `rgba(40,70,20,${rand(0.08, 0.22)})`;
+    g.beginPath(); g.ellipse(rng() * w, rng() * h, r * 0.5, r, 0, 0, 6.29); g.fill();
+  }
+  for (let i = 0; i < 30; i++) {
+    g.fillStyle = `rgba(${rng() < 0.5 ? '35,60,15' : '170,200,110'},${rand(0.08, 0.18)})`;
+    g.fillRect(rng() * w, 0, rand(1, 3), h);
+  }
+  for (let i = 0; i < 1400; i++) {
+    g.fillStyle = `rgba(220,235,190,${rand(0.15, 0.4)})`;
+    g.fillRect(rng() * w, rng() * h, 1, 1.5);
+  }
+});
+
+// 花弁の光沢ムラ: 葉脈の溝は少し艶があり、面は細かくざらつく
+const petalRough = canvasTex(256, 1024, (g, w, h) => {
+  g.fillStyle = '#c8c8c8'; g.fillRect(0, 0, w, h);
+  for (const v of veinLines) {
+    g.strokeStyle = `rgba(90,90,90,${v.a * 2})`;
+    g.lineWidth = v.w;
+    g.beginPath();
+    for (let y = 0; y <= h; y += 16) {
+      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 3;
+      y === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  const img = g.getImageData(0, 0, w, h);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (rng() - 0.5) * 40;
+    img.data[i] += n; img.data[i + 1] += n; img.data[i + 2] += n;
+  }
+  g.putImageData(img, 0, 0);
+}, false);
+
+const stemRough = canvasTex(64, 256, (g, w, h) => {
+  g.fillStyle = '#9a9a9a'; g.fillRect(0, 0, w, h);
+  // 粉を吹いたようなブルーム (艶消し) のむら
+  for (let i = 0; i < 60; i++) {
+    g.fillStyle = `rgba(255,255,255,${rand(0.05, 0.2)})`;
+    g.beginPath(); g.ellipse(rng() * w, rng() * h, rand(2, 8), rand(10, 40), 0, 0, 6.29); g.fill();
+  }
+}, false);
+
 // ---------- マテリアル ----------
 const petalMat = new THREE.MeshPhysicalMaterial({
   map: petalMap, bumpMap: petalBump, bumpScale: 1.4, vertexColors: true,
-  roughness: 0.46, sheen: 1, sheenRoughness: 0.32, sheenColor: new THREE.Color(0xff3b3b),
+  roughnessMap: petalRough, roughness: 0.68, sheen: 1, sheenRoughness: 0.32, sheenColor: new THREE.Color(0xff3b3b),
   clearcoat: 0.12, clearcoatRoughness: 0.45, side: THREE.DoubleSide, envMapIntensity: 0.9,
 });
 addTranslucency(petalMat, 0.45, 0xff1a1a);
 
 const stamenMat = new THREE.MeshPhysicalMaterial({
-  color: 0xc80c1c, roughness: 0.32, clearcoat: 0.35, clearcoatRoughness: 0.3,
+  map: filamentMap, bumpMap: filamentMap, bumpScale: 0.6, roughness: 0.32, clearcoat: 0.35, clearcoatRoughness: 0.3,
   sheen: 0.6, sheenColor: new THREE.Color(0xff5050), envMapIntensity: 0.9,
 });
 addTranslucency(stamenMat, 0.55, 0xff2020);
 
 const styleMat = stamenMat.clone();
-styleMat.color.set(0xe02a30);
+styleMat.color.set(0xffd0d0);
 addTranslucency(styleMat, 0.55, 0xff2020);
 
 const antherMat = new THREE.MeshPhysicalMaterial({ map: pollenMap, bumpMap: pollenMap, bumpScale: 2, roughness: 0.85, sheen: 0.5, sheenColor: new THREE.Color(0xffd27a) });
 const stigmaMat = new THREE.MeshPhysicalMaterial({ color: 0xf2c8c0, roughness: 0.5, sheen: 1, sheenColor: new THREE.Color(0xffffff) });
 
 const stemMat = new THREE.MeshPhysicalMaterial({
-  map: stemMap, bumpMap: stemBump, bumpScale: 0.8, roughness: 0.5, clearcoat: 0.25, clearcoatRoughness: 0.45,
+  map: stemMap, bumpMap: stemBump, bumpScale: 0.8, roughnessMap: stemRough, roughness: 0.6, clearcoat: 0.25, clearcoatRoughness: 0.45,
   sheen: 0.15, sheenColor: new THREE.Color(0xc8d4b8), sheenRoughness: 0.6, envMapIntensity: 0.7,
 });
 addTranslucency(stemMat, 0.12, 0xb8ff70);
 
-const ovaryMat = new THREE.MeshPhysicalMaterial({ color: 0x5f7d24, roughness: 0.62, clearcoat: 0.08, clearcoatRoughness: 0.6,
+const ovaryMat = new THREE.MeshPhysicalMaterial({ map: greenMap, bumpMap: greenMap, bumpScale: 0.8, color: 0xd8e6c0, roughness: 0.62, clearcoat: 0.08, clearcoatRoughness: 0.6,
   sheen: 0.3, sheenColor: new THREE.Color(0xc8d8a0) });
 addTranslucency(ovaryMat, 0.15, 0xc8ff80);
 const bractMat = new THREE.MeshStandardMaterial({ map: bractMap, roughness: 0.9, side: THREE.DoubleSide });
@@ -588,6 +692,7 @@ function buildPlant(height, detail, seedLean) {
   const add = (list, mat, shadow = true) => {
     if (!list.length) return;
     const mesh = new THREE.Mesh(mergeGeometries(list), mat);
+    mesh.userData.photoMat = mat;
     mesh.castShadow = shadow; mesh.receiveShadow = true;
     group.add(mesh);
     list.forEach((g) => g.dispose());
@@ -620,13 +725,15 @@ controls.addEventListener('start', () => { controls.autoRotate = false; });
 
 // GLB として書き出し
 document.getElementById('export').addEventListener('click', () => {
+  useMaterials('photo');
   new GLTFExporter().parse(lily, (glb) => {
+    if (mode === 'illust') useMaterials('toon');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([glb], { type: 'model/gltf-binary' }));
     a.download = 'higanbana.glb';
     a.click();
     URL.revokeObjectURL(a.href);
-  }, (err) => console.error(err), { binary: true });
+  }, (err) => { console.error(err); if (mode === 'illust') useMaterials('toon'); }, { binary: true });
 });
 
 window.addEventListener('resize', () => {
@@ -635,10 +742,162 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
+// ---------- イラスト調モード ----------
+// トゥーン陰影 + 深度/法線から抽出した線画 + 和紙の地
+const toonRamp = (() => {
+  const t = new THREE.DataTexture(new Uint8Array([90, 90, 90, 255, 175, 175, 175, 255, 235, 235, 235, 255, 255, 255, 255, 255]), 4, 1);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.needsUpdate = true;
+  return t;
+})();
+const paperTex = canvasTex(512, 512, (g, w, h) => {
+  g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 1600; i++) {
+    g.strokeStyle = `rgba(${rng() < 0.5 ? '255,255,255' : '0,0,0'},${rand(0.04, 0.12)})`;
+    g.lineWidth = rand(0.5, 1.4);
+    const x = rng() * w, y = rng() * h, a = rng() * 6.28, l = rand(4, 22);
+    g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + rand(-4, 4), y + rand(-4, 4), x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke();
+  }
+  const img = g.getImageData(0, 0, w, h);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (rng() - 0.5) * 22;
+    img.data[i] += n; img.data[i + 1] += n; img.data[i + 2] += n;
+  }
+  g.putImageData(img, 0, 0);
+}, false);
+
+// 線の太さの重み: 細い雄しべ・雌しべは線を弱く
+const inkWeights = new Map([[stamenMat, 0.3], [styleMat, 0.3], [antherMat, 0.6], [stigmaMat, 0.3]]);
+const toonMats = new Map();
+const normalMats = new Map();
+function toonFor(mat) {
+  if (!toonMats.has(mat)) {
+    const t = new THREE.MeshToonMaterial({
+      map: mat.map, color: mat.color, vertexColors: mat.vertexColors, side: mat.side, gradientMap: toonRamp,
+    });
+    toonMats.set(mat, t);
+  }
+  return toonMats.get(mat);
+}
+function normalFor(mat) {
+  if (!normalMats.has(mat)) {
+    normalMats.set(mat, new THREE.ShaderMaterial({
+      side: THREE.DoubleSide,
+      uniforms: { weight: { value: inkWeights.get(mat) ?? 1 } },
+      vertexShader: `varying vec3 vN; void main() { vN = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `uniform float weight; varying vec3 vN; void main() {
+        vec3 n = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
+        gl_FragColor = vec4(n * 0.5 + 0.5, weight); }`,
+    }));
+  }
+  return normalMats.get(mat);
+}
+const meshes = [];
+lily.traverse((o) => { if (o.isMesh) meshes.push(o); });
+function useMaterials(kind) {
+  for (const m of meshes) {
+    const base = m.userData.photoMat;
+    m.material = kind === 'toon' ? toonFor(base) : kind === 'normal' ? normalFor(base) : base;
+  }
+}
+
+const size = new THREE.Vector2();
+const colorRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+const normalRT = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType });
+normalRT.depthTexture = new THREE.DepthTexture(1, 1, THREE.FloatType);
+function resizeTargets() {
+  renderer.getDrawingBufferSize(size);
+  colorRT.setSize(size.x, size.y);
+  normalRT.setSize(size.x, size.y);
+  inkQuad.material.uniforms.resolution.value.copy(size);
+}
+
+const inkQuad = new FullScreenQuad(new THREE.ShaderMaterial({
+  uniforms: {
+    tColor: { value: colorRT.texture }, tNormal: { value: normalRT.texture }, tDepth: { value: normalRT.depthTexture },
+    tPaper: { value: paperTex }, resolution: { value: new THREE.Vector2() },
+    cameraNear: { value: camera.near }, cameraFar: { value: camera.far },
+    paperColor: { value: new THREE.Color(0xf6efe2) }, inkColor: { value: new THREE.Color(0x3a1a12) },
+    lineScale: { value: 1 },
+  },
+  vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`,
+  fragmentShader: `
+    #include <packing>
+    uniform sampler2D tColor, tNormal, tDepth, tPaper;
+    uniform vec2 resolution; uniform float cameraNear, cameraFar, lineScale;
+    uniform vec3 paperColor, inkColor;
+    varying vec2 vUv;
+    float depthAt(vec2 uv) { return -perspectiveDepthToViewZ(texture2D(tDepth, uv).x, cameraNear, cameraFar); }
+    void main() {
+      vec2 px = lineScale / resolution;
+      float dC = depthAt(vUv);
+      vec4 nC = texture2D(tNormal, vUv);
+      float dEdge = 0.0, nEdge = 0.0, w = nC.a;
+      for (int i = 0; i < 8; i++) {
+        float a = float(i) * 0.785398;
+        vec2 uv = vUv + vec2(cos(a), sin(a)) * px;
+        float d = depthAt(uv);
+        vec4 n = texture2D(tNormal, uv);
+        dEdge = max(dEdge, abs(d - dC) / min(d, dC));
+        nEdge = max(nEdge, length(n.rgb - nC.rgb) * step(0.01, n.a * nC.a));
+        w = max(w, n.a);
+      }
+      float ink = max(smoothstep(0.04, 0.12, dEdge), smoothstep(0.35, 0.7, nEdge)) * w;
+      float paper = texture2D(tPaper, vUv * resolution / 512.0).r;
+      vec4 c = texture2D(tColor, vUv);
+      // 彩度をやや上げ、紙の繊維で色をにじませる
+      float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));
+      vec3 col = mix(vec3(l), c.rgb, 1.25) * (0.9 + 0.2 * paper);
+      vec3 bg = paperColor * (0.9 + 0.2 * paper);
+      vec3 outc = mix(bg, col, c.a);
+      outc = mix(outc, inkColor, clamp(ink, 0.0, 1.0) * 0.92);
+      gl_FragColor = vec4(outc, 1.0);
+      #include <colorspace_fragment>
+    }`,
+}));
+inkQuad.material.uniforms.paperColor.value.convertSRGBToLinear();
+inkQuad.material.uniforms.inkColor.value.convertSRGBToLinear();
+resizeTargets();
+window.addEventListener('resize', resizeTargets);
+
+const ambient = new THREE.HemisphereLight(0xfff4ea, 0x8a6a60, 0);
+scene.add(ambient);
+
+let mode = 'photo';
+const modeButtons = document.querySelectorAll('[data-mode]');
+function setMode(next) {
+  mode = next;
+  document.body.classList.toggle('illust', mode === 'illust');
+  modeButtons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
+  useMaterials(mode === 'illust' ? 'toon' : 'photo');
+  ambient.intensity = mode === 'illust' ? 1.6 : 0;
+  scene.environment = mode === 'illust' ? null : envTex;
+}
+modeButtons.forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'i' || e.key === 'I') setMode(mode === 'illust' ? 'photo' : 'illust');
+});
+
 // ---------- 描画 ----------
 renderer.setAnimationLoop(() => {
   controls.update();
+  if (mode !== 'illust') {
+    renderer.render(scene, camera);
+    return;
+  }
+  renderer.setRenderTarget(colorRT);
+  renderer.setClearColor(0x000000, 0);
+  renderer.clear();
   renderer.render(scene, camera);
+  useMaterials('normal');
+  renderer.shadowMap.autoUpdate = false;
+  renderer.setRenderTarget(normalRT);
+  renderer.clear();
+  renderer.render(scene, camera);
+  renderer.shadowMap.autoUpdate = true;
+  useMaterials('toon');
+  renderer.setRenderTarget(null);
+  inkQuad.render(renderer);
 });
 requestAnimationFrame(() => document.getElementById('loading').classList.add('done'));
 </script>
