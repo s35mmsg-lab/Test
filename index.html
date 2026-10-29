@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>彼岸花 — Lycoris radiata</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #f4e9e1;
+    --ink-dim: rgba(244, 233, 225, 0.62);
+    --bg: #120806;
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); }
+  canvas { display: block; }
+  .title {
+    position: fixed; left: 28px; bottom: 26px; pointer-events: none;
+    font-family: "Shippori Mincho", serif; text-shadow: 0 1px 12px rgba(0,0,0,.55);
+  }
+  .title h1 { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: .18em; }
+  .title p { margin: 4px 0 0; font-size: 13px; letter-spacing: .12em; color: var(--ink-dim); font-style: italic; }
+  .hint {
+    position: fixed; right: 22px; bottom: 24px; font: 12px/1.7 system-ui, sans-serif;
+    color: var(--ink-dim); text-align: right; pointer-events: none; text-shadow: 0 1px 8px rgba(0,0,0,.6);
+  }
+  #loading {
+    position: fixed; inset: 0; display: grid; place-items: center; background: var(--bg);
+    font-family: "Shippori Mincho", serif; letter-spacing: .3em; font-size: 15px; color: var(--ink-dim);
+    transition: opacity 1.2s ease;
+  }
+  #loading.done { opacity: 0; pointer-events: none; }
+  @media (max-width: 600px) {
+    .title { left: 16px; bottom: 64px; }
+    .title h1 { font-size: 26px; }
+    .hint { right: 16px; left: 16px; bottom: 14px; text-align: left; }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="loading">彼岸花を咲かせています…</div>
+<div class="title">
+  <h1>彼岸花</h1>
+  <p>Lycoris radiata — 曼珠沙華</p>
+</div>
+<div class="hint">ドラッグ：回転　ホイール：ズーム<br>D：被写界深度　R：自動回転</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// 単位: 1 = 1cm
+
+// ---------- 乱数 ----------
+function mulberry32(seed) {
+  return function () {
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(20260929);
+const rand = (a, b) => a + (b - a) * rng();
+
+const UP = new THREE.Vector3(0, 1, 0);
+
+// ---------- レンダラー ----------
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.42;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(38, window.innerWidth / window.innerHeight, 0.5, 12000);
+camera.position.set(14, 47, 30);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 43, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.minDistance = 8;
+controls.maxDistance = 220;
+controls.maxPolarAngle = Math.PI * 0.53;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35;
+
+// ---------- 空と環境光 ----------
+const sunElev = THREE.MathUtils.degToRad(11);
+const sunAzim = THREE.MathUtils.degToRad(-145);
+const sunDir = new THREE.Vector3().setFromSphericalCoords(1, Math.PI / 2 - sunElev, sunAzim);
+
+const sky = new Sky();
+sky.scale.setScalar(9000);
+const su = sky.material.uniforms;
+su.turbidity.value = 6;
+su.rayleigh.value = 2.8;
+su.mieCoefficient.value = 0.004;
+su.mieDirectionalG.value = 0.84;
+su.sunPosition.value.copy(sunDir);
+scene.add(sky);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+const envScene = new THREE.Scene();
+const envSky = new Sky();
+envSky.scale.setScalar(1000);
+for (const k of Object.keys(su)) envSky.material.uniforms[k].value = su[k].value;
+envScene.add(envSky);
+// 地面からの照り返し
+const envGround = new THREE.Mesh(
+  new THREE.CircleGeometry(900, 32).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: 0x2a3a14 })
+);
+envGround.position.y = -5;
+envScene.add(envGround);
+const envMap = pmrem.fromScene(envScene, 0.02).texture;
+scene.environment = envMap;
+
+scene.fog = new THREE.FogExp2(0xb8a28c, 0.00055);
+
+// ---------- 光源 ----------
+const sunColor = new THREE.Color(0xffc690);
+const sun = new THREE.DirectionalLight(sunColor, 4.2);
+sun.position.copy(sunDir).multiplyScalar(300);
+sun.target.position.set(0, 25, 0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+const sc = sun.shadow.camera;
+sc.left = -70; sc.right = 70; sc.top = 70; sc.bottom = -70; sc.near = 50; sc.far = 700;
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.03;
+sun.shadow.radius = 3;
+scene.add(sun, sun.target);
+
+const hemi = new THREE.HemisphereLight(0xaac4e6, 0x3b2a18, 0.55);
+scene.add(hemi);
+
+// 正面からの弱い補助光
+const fill = new THREE.DirectionalLight(0xffe2d0, 0.35);
+fill.position.set(30, 40, 60);
+scene.add(fill);
+
+// ---------- 薄い花弁の透過光 (サブサーフェスの近似) ----------
+const transUniforms = {
+  uSunDir: { value: sunDir.clone() },
+  uSunColor: { value: sunColor.clone().multiplyScalar(4.2) },
+};
+function addTranslucency(material, strength, tint) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uSunDir = transUniforms.uSunDir;
+    shader.uniforms.uSunColor = transUniforms.uSunColor;
+    shader.uniforms.uTrans = { value: strength };
+    shader.uniforms.uTint = { value: new THREE.Color(tint) };
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform vec3 uSunDir; uniform vec3 uSunColor; uniform float uTrans; uniform vec3 uTint;`)
+      .replace('#include <opaque_fragment>', `
+        {
+          vec3 Lv = normalize((viewMatrix * vec4(uSunDir, 0.0)).xyz);
+          vec3 Vv = normalize(vViewPosition);
+          float through = pow(clamp(dot(-Vv, Lv), 0.0, 1.0), 3.0);
+          float backside = clamp(dot(-normal, Lv), 0.0, 1.0);
+          float t = (0.55 * backside + 1.1 * through) * uTrans;
+          outgoingLight += diffuseColor.rgb * uTint * uSunColor * t;
+        }
+        #include <opaque_fragment>`);
+  };
+}
+
+// ---------- 手続き的テクスチャ ----------
+function canvasTex(w, h, draw, srgb = true) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
+// 花被片: x = 幅方向, y = 長さ方向 (上が先端, 下が基部)
+const veinLines = [];
+for (let i = 0; i < 46; i++) {
+  veinLines.push({ x: rng(), w: rand(0.6, 1.8), a: rand(0.05, 0.16), ph: rand(0, 6.28), f: rand(2, 6) });
+}
+const petalMap = canvasTex(256, 1024, (g, w, h) => {
+  const grd = g.createLinearGradient(0, 0, 0, h);
+  grd.addColorStop(0.0, '#a1061a');
+  grd.addColorStop(0.15, '#c20a22');
+  grd.addColorStop(0.55, '#cc0f26');
+  grd.addColorStop(0.85, '#b00a20');
+  grd.addColorStop(1.0, '#7c0814');
+  g.fillStyle = grd; g.fillRect(0, 0, w, h);
+  // 縁を少し濃く
+  const edge = g.createLinearGradient(0, 0, w, 0);
+  edge.addColorStop(0, 'rgba(90,0,12,0.35)');
+  edge.addColorStop(0.18, 'rgba(90,0,12,0)');
+  edge.addColorStop(0.82, 'rgba(90,0,12,0)');
+  edge.addColorStop(1, 'rgba(90,0,12,0.35)');
+  g.fillStyle = edge; g.fillRect(0, 0, w, h);
+  // 中肋はわずかに明るい
+  const mid = g.createLinearGradient(0, 0, w, 0);
+  mid.addColorStop(0.42, 'rgba(255,110,110,0)');
+  mid.addColorStop(0.5, 'rgba(255,110,110,0.22)');
+  mid.addColorStop(0.58, 'rgba(255,110,110,0)');
+  g.fillStyle = mid; g.fillRect(0, 0, w, h);
+  // 細い葉脈
+  for (const v of veinLines) {
+    g.strokeStyle = `rgba(70,0,10,${v.a})`;
+    g.lineWidth = v.w;
+    g.beginPath();
+    for (let y = 0; y <= h; y += 16) {
+      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 3;
+      y === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  // 斑点ノイズ
+  const img = g.getImageData(0, 0, w, h);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (rng() - 0.5) * 14;
+    img.data[i] += n; img.data[i + 1] += n * 0.3; img.data[i + 2] += n * 0.3;
+  }
+  g.putImageData(img, 0, 0);
+});
+const petalBump = canvasTex(256, 1024, (g, w, h) => {
+  g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
+  for (const v of veinLines) {
+    g.strokeStyle = `rgba(30,30,30,${v.a * 2.2})`;
+    g.lineWidth = v.w * 1.5;
+    g.beginPath();
+    for (let y = 0; y <= h; y += 16) {
+      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 3;
+      y === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  const mid = g.createLinearGradient(0, 0, w, 0);
+  mid.addColorStop(0.44, 'rgba(0,0,0,0)');
+  mid.addColorStop(0.5, 'rgba(0,0,0,0.45)');
+  mid.addColorStop(0.56, 'rgba(0,0,0,0)');
+  g.fillStyle = mid; g.fillRect(0, 0, w, h);
+}, false);
+
+const stemMap = canvasTex(128, 512, (g, w, h) => {
+  g.fillStyle = '#5d8a33'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 70; i++) {
+    const l = rand(-18, 14);
+    g.fillStyle = `rgba(${l > 0 ? 200 : 20},${l > 0 ? 230 : 50},${l > 0 ? 160 : 10},${Math.abs(l) / 100})`;
+    g.fillRect(rng() * w, 0, rand(1, 4), h);
+  }
+  // 基部は赤紫がかる
+  const grd = g.createLinearGradient(0, h, 0, 0);
+  grd.addColorStop(0, 'rgba(90,40,30,0.55)');
+  grd.addColorStop(0.08, 'rgba(90,40,30,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, w, h);
+});
+
+const groundMap = canvasTex(512, 512, (g, w, h) => {
+  g.fillStyle = '#3c4a1f'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 2600; i++) {
+    const r = rand(2, 14);
+    const c = rng();
+    g.fillStyle = c < 0.5 ? `rgba(70,95,30,${rand(0.15, 0.4)})`
+      : c < 0.8 ? `rgba(40,52,18,${rand(0.2, 0.5)})`
+      : `rgba(110,90,50,${rand(0.15, 0.35)})`;
+    g.beginPath(); g.ellipse(rng() * w, rng() * h, r, r * rand(0.3, 1), rng() * 3, 0, 6.29); g.fill();
+  }
+});
+groundMap.repeat.set(60, 60);
+
+// ---------- マテリアル ----------
+const petalMat = new THREE.MeshPhysicalMaterial({
+  map: petalMap, bumpMap: petalBump, bumpScale: 1.2,
+  roughness: 0.46, sheen: 1, sheenRoughness: 0.32, sheenColor: new THREE.Color(0xff3b3b),
+  clearcoat: 0.12, clearcoatRoughness: 0.45, side: THREE.DoubleSide, envMapIntensity: 0.9,
+});
+addTranslucency(petalMat, 0.45, 0xff1a1a);
+
+const stamenMat = new THREE.MeshPhysicalMaterial({
+  color: 0xc80c1c, roughness: 0.32, clearcoat: 0.35, clearcoatRoughness: 0.3,
+  sheen: 0.6, sheenColor: new THREE.Color(0xff5050), envMapIntensity: 0.9,
+});
+addTranslucency(stamenMat, 0.55, 0xff2020);
+
+const styleMat = stamenMat.clone();
+styleMat.color.set(0xe02a30);
+addTranslucency(styleMat, 0.55, 0xff2020);
+
+const antherMat = new THREE.MeshStandardMaterial({ color: 0x6a4318, roughness: 0.85 });
+const stigmaMat = new THREE.MeshStandardMaterial({ color: 0xf0d6c8, roughness: 0.6 });
+
+const stemMat = new THREE.MeshPhysicalMaterial({
+  map: stemMap, roughness: 0.42, clearcoat: 0.45, clearcoatRoughness: 0.35, envMapIntensity: 0.8,
+});
+addTranslucency(stemMat, 0.12, 0xb8ff70);
+
+const ovaryMat = new THREE.MeshPhysicalMaterial({ color: 0x5f8c2c, roughness: 0.5, clearcoat: 0.3 });
+const bractMat = new THREE.MeshStandardMaterial({ color: 0x9a7448, roughness: 0.95, side: THREE.DoubleSide });
+addTranslucency(bractMat, 0.4, 0xffc070);
+
+// ---------- ジオメトリ生成 ----------
+const smooth = (a, b, x) => { const t = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+// 花被片 (ローカル座標: +X 外向き, +Y 花の軸, Z 幅方向)
+function makeTepal(o) {
+  const { length, width, rise, curl, wave, waveFreq, twist, cup, segU, segV, phaseA, phaseB } = o;
+  const pos = [], nor = [], uv = [], idx = [];
+  const ds = length / segU;
+  const p = new THREE.Vector3();
+  const C = [], T = [];
+  for (let i = 0; i <= segU; i++) {
+    const u = i / segU;
+    const a = rise - curl * Math.pow(u, 1.65);
+    const t = new THREE.Vector3(Math.cos(a), Math.sin(a), 0);
+    C.push(p.clone()); T.push(t);
+    p.addScaledVector(t, ds);
+  }
+  const B = new THREE.Vector3(), N = new THREE.Vector3(), q = new THREE.Quaternion(), v3 = new THREE.Vector3();
+  for (let i = 0; i <= segU; i++) {
+    const u = i / segU;
+    const w = width * Math.pow(Math.sin(Math.PI * (0.05 + 0.95 * u)), 0.55) * (1 - 0.3 * u);
+    B.set(0, 0, 1).applyQuaternion(q.setFromAxisAngle(T[i], twist * u));
+    N.crossVectors(B, T[i]).normalize();
+    const amp = wave * smooth(0.06, 0.3, u) * (1 - 0.45 * u);
+    for (let j = 0; j <= segV; j++) {
+      const s = j / segV * 2 - 1; // -1..1
+      const as = Math.abs(s);
+      const ruffle = amp * Math.pow(as, 1.6) *
+        Math.sin(u * waveFreq * Math.PI * 2 + (s > 0 ? phaseA : phaseB) + as * 0.8);
+      const curve = cup * w * s * s - 0.06 * w * (1 - as);
+      v3.copy(C[i]).addScaledVector(B, s * w * 0.5).addScaledVector(N, curve + ruffle)
+        .addScaledVector(T[i], ruffle * 0.25 * s);
+      pos.push(v3.x, v3.y, v3.z);
+      nor.push(0, 0, 0);
+      uv.push(j / segV, u);
+    }
+  }
+  const row = segV + 1;
+  for (let i = 0; i < segU; i++) for (let j = 0; j < segV; j++) {
+    const a = i * row + j, b = a + row, c = b + 1, d = a + 1;
+    idx.push(a, b, d, b, c, d);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+// 先細りのチューブ
+function taperTube(points, r0, r1, tubular, radial) {
+  const curve = new THREE.CatmullRomCurve3(points, false, 'centripetal');
+  const frames = curve.computeFrenetFrames(tubular, false);
+  const pos = [], nor = [], uv = [], idx = [];
+  const P = new THREE.Vector3(), D = new THREE.Vector3();
+  for (let i = 0; i <= tubular; i++) {
+    const t = i / tubular;
+    curve.getPointAt(t, P);
+    const r = THREE.MathUtils.lerp(r0, r1, t);
+    const Nn = frames.normals[i], Bn = frames.binormals[i];
+    for (let j = 0; j <= radial; j++) {
+      const a = j / radial * Math.PI * 2;
+      D.copy(Nn).multiplyScalar(Math.cos(a)).addScaledVector(Bn, Math.sin(a));
+      pos.push(P.x + D.x * r, P.y + D.y * r, P.z + D.z * r);
+      nor.push(D.x, D.y, D.z);
+      uv.push(j / radial, t);
+    }
+  }
+  for (let i = 0; i < tubular; i++) for (let j = 0; j < radial; j++) {
+    const a = i * (radial + 1) + j, b = a + radial + 1;
+    idx.push(a, b, a + 1, b, b + 1, a + 1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return { geo: g, curve };
+}
+
+const sphereHi = new THREE.SphereGeometry(1, 14, 10);
+const sphereLo = new THREE.SphereGeometry(1, 8, 6);
+const m4 = new THREE.Matrix4();
+
+function ellipsoid(base, center, x, y, z, sx, sy, sz) {
+  m4.makeBasis(x, y, z).scale(new THREE.Vector3(sx, sy, sz)).setPosition(center);
+  return base.clone().applyMatrix4(m4);
+}
+
+function perpendicular(v) {
+  const a = Math.abs(v.y) < 0.9 ? UP : new THREE.Vector3(1, 0, 0);
+  return new THREE.Vector3().crossVectors(v, a).normalize();
+}
+
+// 雄しべ・雌しべの軌跡 (前方に伸び、上方へ反り上がる)
+function filamentPoints(start, dir0, target, len, bend, steps) {
+  const pts = [start.clone()];
+  const p = start.clone(), d = dir0.clone();
+  const ds = len / steps;
+  for (let i = 1; i <= steps; i++) {
+    const s = i / steps;
+    d.lerp(target, bend * (0.4 + 1.2 * s) / steps * 6).normalize();
+    p.addScaledVector(d, ds);
+    pts.push(p.clone());
+  }
+  return { pts, dir: d };
+}
+
+function buildFlower(G, F, A, detail) {
+  const e1 = perpendicular(A);
+  const e2 = new THREE.Vector3().crossVectors(A, e1).normalize();
+  const segU = detail > 0.7 ? 44 : 22, segV = detail > 0.7 ? 8 : 4;
+
+  // 子房
+  G.green.push(ellipsoid(detail > 0.7 ? sphereHi : sphereLo, F.clone().addScaledVector(A, -0.12), e1, A, e2, 0.17, 0.3, 0.17));
+
+  // 花被片 ×6
+  const rot0 = rand(0, Math.PI * 2);
+  for (let i = 0; i < 6; i++) {
+    const phi = rot0 + i / 6 * Math.PI * 2 + rand(-0.15, 0.15);
+    const X = e1.clone().multiplyScalar(Math.cos(phi)).addScaledVector(e2, Math.sin(phi));
+    const Z = new THREE.Vector3().crossVectors(X, A);
+    const tep = makeTepal({
+      length: rand(3.7, 4.5), width: rand(0.42, 0.56),
+      rise: rand(0.62, 0.95), curl: rand(3.0, 4.0),
+      wave: rand(0.07, 0.12), waveFreq: rand(6.5, 9.5), twist: rand(-0.5, 0.5),
+      cup: rand(0.18, 0.32), segU, segV, phaseA: rand(0, 6.28), phaseB: rand(0, 6.28),
+    });
+    m4.makeBasis(X, A, Z).setPosition(F.clone().addScaledVector(A, 0.05).addScaledVector(X, 0.06));
+    G.petal.push(tep.applyMatrix4(m4));
+  }
+
+  // 雄しべ ×6 と 雌しべ ×1
+  const horiz = new THREE.Vector3(A.x, 0, A.z).normalize();
+  const target = UP.clone().multiplyScalar(1.0).addScaledVector(horiz, 0.55).normalize();
+  const tub = detail > 0.7 ? 34 : 14, rad = detail > 0.7 ? 6 : 4;
+  for (let i = 0; i <= 6; i++) {
+    const isStyle = i === 6;
+    const psi = i / 6 * Math.PI * 2 + rand(-0.3, 0.3);
+    const radial = e1.clone().multiplyScalar(Math.cos(psi)).addScaledVector(e2, Math.sin(psi));
+    const dir0 = A.clone().addScaledVector(radial, isStyle ? 0.05 : rand(0.15, 0.3)).normalize();
+    const start = F.clone().addScaledVector(A, 0.15).addScaledVector(radial, isStyle ? 0 : 0.05);
+    const len = isStyle ? rand(8.2, 9.0) : rand(6.6, 8.0);
+    const { pts, dir } = filamentPoints(start, dir0, target, len, rand(0.55, 0.8), 16);
+    const { geo } = taperTube(pts, isStyle ? 0.032 : 0.028, isStyle ? 0.02 : 0.017, tub, rad);
+    const tip = pts[pts.length - 1];
+    if (isStyle) {
+      G.style.push(geo);
+      G.stigma.push(ellipsoid(sphereLo, tip, e1, dir, e2, 0.035, 0.035, 0.035));
+    } else {
+      G.stamen.push(geo);
+      // 丁字着の葯 (糸に対して横向き)
+      const z = new THREE.Vector3().crossVectors(dir, radial).normalize();
+      const x = new THREE.Vector3().crossVectors(dir, z).normalize();
+      G.anther.push(ellipsoid(detail > 0.7 ? sphereHi : sphereLo, tip.clone().addScaledVector(dir, 0.03),
+        x, dir, z, 0.055, 0.06, rand(0.16, 0.21)));
+    }
+  }
+}
+
+function buildPlant(height, detail, seedLean) {
+  const G = { petal: [], stamen: [], style: [], anther: [], stigma: [], green: [], stem: [], bract: [] };
+  // 花茎 (葉はない)
+  const lean = new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)).normalize().multiplyScalar(height * seedLean);
+  const pts = [];
+  for (let i = 0; i <= 6; i++) {
+    const t = i / 6;
+    pts.push(new THREE.Vector3(lean.x * t * t + Math.sin(t * 3 + height) * 0.3, height * t, lean.z * t * t));
+  }
+  const { geo: stemGeo } = taperTube(pts, 0.34, 0.24, detail > 0.7 ? 60 : 20, detail > 0.7 ? 12 : 6);
+  G.stem.push(stemGeo);
+  const top = pts[6];
+  G.green.push(ellipsoid(sphereLo, top.clone().addScaledVector(UP, 0.1), new THREE.Vector3(1, 0, 0), UP, new THREE.Vector3(0, 0, 1), 0.3, 0.28, 0.3));
+
+  // 総苞片 (乾いた褐色)
+  for (let i = 0; i < 2; i++) {
+    const phi = rand(0, Math.PI * 2) + i * Math.PI;
+    const X = new THREE.Vector3(Math.cos(phi), 0, Math.sin(phi));
+    const Z = new THREE.Vector3().crossVectors(X, UP);
+    const b = makeTepal({
+      length: rand(1.8, 2.6), width: 0.32, rise: rand(-1.1, -0.6), curl: rand(0.2, 0.6),
+      wave: 0.05, waveFreq: 3, twist: rand(-0.8, 0.8), cup: 0.4, segU: 14, segV: 4, phaseA: 0, phaseB: 1,
+    });
+    m4.makeBasis(X, UP, Z).setPosition(top.clone().addScaledVector(X, 0.2).addScaledVector(UP, -0.1));
+    G.bract.push(b.applyMatrix4(m4));
+  }
+
+  // 散形花序 5〜7輪
+  const n = 5 + Math.floor(rng() * 3);
+  const rot = rand(0, Math.PI * 2);
+  for (let k = 0; k < n; k++) {
+    const phi = rot + k / n * Math.PI * 2 + rand(-0.25, 0.25);
+    const out = new THREE.Vector3(Math.cos(phi), 0, Math.sin(phi));
+    const tilt = rand(1.0, 1.4);
+    const A = out.clone().multiplyScalar(Math.sin(tilt)).addScaledVector(UP, Math.cos(tilt)).normalize();
+    const pl = rand(0.9, 1.6);
+    const F = top.clone().addScaledVector(UP, 0.5).addScaledVector(out, 0.35).addScaledVector(A, pl);
+    const ped = [
+      top.clone(),
+      top.clone().addScaledVector(UP, 0.35).addScaledVector(out, 0.1),
+      top.clone().addScaledVector(UP, 0.55).addScaledVector(out, 0.4),
+      F.clone().addScaledVector(A, -0.35),
+      F.clone().addScaledVector(A, -0.1),
+    ];
+    G.green.push(taperTube(ped, 0.08, 0.065, detail > 0.7 ? 16 : 6, detail > 0.7 ? 6 : 4).geo);
+    buildFlower(G, F, A, detail);
+  }
+
+  const group = new THREE.Group();
+  const add = (list, mat, shadow = true) => {
+    if (!list.length) return;
+    const mesh = new THREE.Mesh(mergeGeometries(list), mat);
+    mesh.castShadow = shadow; mesh.receiveShadow = true;
+    group.add(mesh);
+    list.forEach((g) => g.dispose());
+  };
+  add(G.petal, petalMat);
+  add(G.stamen, stamenMat);
+  add(G.style, styleMat);
+  add(G.anther, antherMat);
+  add(G.stigma, stigmaMat, false);
+  add(G.green, ovaryMat);
+  add(G.stem, stemMat);
+  add(G.bract, bractMat);
+  group.userData.top = top.clone();
+  return group;
+}
+
+// ---------- 地面と草 ----------
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(6000, 6000).rotateX(-Math.PI / 2),
+  new THREE.MeshStandardMaterial({ map: groundMap, roughness: 1, envMapIntensity: 0.5 })
+);
+ground.receiveShadow = true;
+scene.add(ground);
+
+const windUniform = { value: 0 };
+{
+  const blade = new THREE.PlaneGeometry(0.32, 1, 1, 5);
+  blade.translate(0, 0.5, 0);
+  const bp = blade.attributes.position;
+  for (let i = 0; i < bp.count; i++) {
+    const y = bp.getY(i);
+    bp.setX(i, bp.getX(i) * (1 - y * 0.92));
+    bp.setZ(i, y * y * 0.35);
+  }
+  blade.computeVertexNormals();
+
+  const grassMat = new THREE.MeshStandardMaterial({ roughness: 0.75, side: THREE.DoubleSide, envMapIntensity: 0.6 });
+  grassMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = windUniform;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform float uTime;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vec3 ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
+        float sway = sin(uTime * 1.4 + ip.x * 0.045 + ip.z * 0.03) * 0.6 + sin(uTime * 3.3 + ip.z * 0.11) * 0.18;
+        transformed.z += sway * position.y * position.y * 0.45;`);
+  };
+
+  const COUNT = 70000;
+  const grass = new THREE.InstancedMesh(blade, grassMat, COUNT);
+  const dummy = new THREE.Object3D();
+  const col = new THREE.Color();
+  for (let i = 0; i < COUNT; i++) {
+    const r = 320 * Math.pow(rng(), 1.35);
+    const a = rng() * Math.PI * 2;
+    dummy.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+    dummy.rotation.set(rand(-0.2, 0.2), rng() * Math.PI * 2, rand(-0.2, 0.2));
+    const h = rand(5, 17) * (r < 12 ? 0.75 : 1);
+    dummy.scale.set(rand(0.8, 1.4), h, rand(0.6, 1.2) * h * 0.08);
+    dummy.updateMatrix();
+    grass.setMatrixAt(i, dummy.matrix);
+    const c = rng();
+    col.setHSL(c < 0.82 ? rand(0.2, 0.28) : rand(0.1, 0.14), rand(0.35, 0.6), rand(0.16, 0.3));
+    grass.setColorAt(i, col);
+  }
+  grass.receiveShadow = true;
+  scene.add(grass);
+}
+
+// 遠景の山並み (霧に溶ける)
+{
+  const hg = new THREE.CylinderGeometry(2600, 2600, 1, 160, 1, true);
+  const hp = hg.attributes.position;
+  for (let i = 0; i < hp.count; i++) {
+    const x = hp.getX(i), z = hp.getZ(i);
+    if (hp.getY(i) > 0) {
+      const a = Math.atan2(z, x);
+      const h = 110 + 70 * Math.sin(a * 3.1 + 1) + 45 * Math.sin(a * 7.7 + 2) + 18 * Math.sin(a * 17.3);
+      hp.setY(i, h);
+    } else hp.setY(i, -10);
+  }
+  hg.computeVertexNormals();
+  scene.add(new THREE.Mesh(hg, new THREE.MeshStandardMaterial({ color: 0x1f2b17, roughness: 1, side: THREE.BackSide })));
+}
+
+// ---------- 彼岸花の群生 ----------
+const plants = [];
+function plant(x, z, h, detail, lean) {
+  const p = buildPlant(h, detail, lean);
+  p.position.set(x, 0, z);
+  p.userData.phase = rand(0, 10);
+  p.userData.amp = rand(0.6, 1.2);
+  scene.add(p);
+  plants.push(p);
+  return p;
+}
+
+const hero = plant(0, 0, 42, 1, 0.03);
+// 主役の周りの株
+const near = [[-11, -6, 37], [9, -9, 46], [-4, -16, 40], [15, 4, 33], [-16, 6, 31], [5, -24, 44], [-22, -18, 38], [22, -18, 36], [1, 12, 26]];
+for (const [x, z, h] of near) plant(x + rand(-2, 2), z + rand(-2, 2), h + rand(-3, 3), 1, 0.06);
+// 奥へ広がる群生 (畦道沿いの帯)
+for (let i = 0; i < 46; i++) {
+  const t = rng();
+  const x = THREE.MathUtils.lerp(-260, 260, t) + rand(-25, 25);
+  const z = -40 - Math.abs(x) * 0.12 - rand(0, 120) - (rng() < 0.3 ? rand(60, 160) : 0);
+  plant(x, z, rand(32, 48), 0.5, 0.08);
+}
+for (let i = 0; i < 18; i++) {
+  const a = rand(-0.6, 0.6) + Math.PI * (rng() < 0.5 ? 0 : 1);
+  const r = rand(45, 120);
+  plant(Math.cos(a) * r, Math.sin(a) * r * 0.4 - 20, rand(30, 46), 0.5, 0.08);
+}
+
+const heroTop = hero.userData.top.clone().add(hero.position).add(new THREE.Vector3(0, 1.5, 0));
+controls.target.copy(heroTop);
+
+// ---------- ポストプロセス ----------
+const rt = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: 4 });
+const composer = new EffectComposer(renderer, rt);
+composer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+composer.addPass(new RenderPass(scene, camera));
+const bokeh = new BokehPass(scene, camera, { focus: 30, aperture: 0.00028, maxblur: 0.008 });
+composer.addPass(bokeh);
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.14, 0.5, 0.95);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+// ---------- 入力 ----------
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'd' || e.key === 'D') bokeh.enabled = !bokeh.enabled;
+  if (e.key === 'r' || e.key === 'R') controls.autoRotate = !controls.autoRotate;
+});
+controls.addEventListener('start', () => { controls.autoRotate = false; });
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---------- アニメーション ----------
+const clock = new THREE.Clock();
+function frame() {
+  const t = clock.getElapsedTime();
+  windUniform.value = t;
+  for (const p of plants) {
+    const ph = p.userData.phase, a = p.userData.amp;
+    p.rotation.z = (Math.sin(t * 0.9 + ph) * 0.011 + Math.sin(t * 2.3 + ph * 1.7) * 0.003) * a;
+    p.rotation.x = (Math.sin(t * 0.7 + ph * 0.6) * 0.008) * a;
+  }
+  controls.update();
+  bokeh.uniforms.focus.value = camera.position.distanceTo(controls.target);
+  composer.render();
+  requestAnimationFrame(frame);
+}
+frame();
+requestAnimationFrame(() => document.getElementById('loading').classList.add('done'));
+</script>
+</body>
+</html>
