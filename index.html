@@ -165,7 +165,7 @@ const transUniforms = {
   uSunDir: { value: sunDir.clone() },
   uSunColor: { value: sunColor.clone().multiplyScalar(4.2) },
 };
-function addTranslucency(material, strength, tint) {
+function addTranslucency(material, strength, tint, thinEdges = false) {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uSunDir = transUniforms.uSunDir;
     shader.uniforms.uSunColor = transUniforms.uSunColor;
@@ -181,6 +181,9 @@ function addTranslucency(material, strength, tint) {
           float through = pow(clamp(dot(-Vv, Lv), 0.0, 1.0), 3.0);
           float backside = clamp(dot(-normal, Lv), 0.0, 1.0);
           float t = (0.55 * backside + 1.1 * through) * uTrans;
+          ${thinEdges ? `
+          float ex = abs(fract(vMapUv.x * ${ATLAS}.0) * 2.0 - 1.0);
+          t *= mix(0.7, 1.6, ex * ex) * mix(1.0, 1.3, vMapUv.y);` : ''}
           outgoingLight += diffuseColor.rgb * uTint * uSunColor * t;
         }
         #include <opaque_fragment>`);
@@ -200,43 +203,90 @@ function canvasTex(w, h, draw, srgb = true) {
 }
 
 // 花被片: x = 幅方向, y = 長さ方向 (上が先端, 下が基部)
-const veinLines = [];
-for (let i = 0; i < 90; i++) {
-  veinLines.push({ x: rng(), w: rand(0.6, 1.8), a: rand(0.05, 0.16), ph: rand(0, 6.28), f: rand(2, 6) });
-}
-const petalMap = canvasTex(512, 2048, (g, w, h) => {
-  const grd = g.createLinearGradient(0, 0, 0, h);
-  grd.addColorStop(0.0, '#a1061a');
-  grd.addColorStop(0.15, '#c20a22');
-  grd.addColorStop(0.55, '#cc0f26');
-  grd.addColorStop(0.85, '#b00a20');
-  grd.addColorStop(1.0, '#7c0814');
-  g.fillStyle = grd; g.fillRect(0, 0, w, h);
-  // 縁を少し濃く
-  const edge = g.createLinearGradient(0, 0, w, 0);
-  edge.addColorStop(0, 'rgba(90,0,12,0.35)');
-  edge.addColorStop(0.18, 'rgba(90,0,12,0)');
-  edge.addColorStop(0.82, 'rgba(90,0,12,0)');
-  edge.addColorStop(1, 'rgba(90,0,12,0.35)');
-  g.fillStyle = edge; g.fillRect(0, 0, w, h);
-  // 中肋はわずかに明るい
-  const mid = g.createLinearGradient(0, 0, w, 0);
-  mid.addColorStop(0.42, 'rgba(255,110,110,0)');
-  mid.addColorStop(0.5, 'rgba(255,110,110,0.22)');
-  mid.addColorStop(0.58, 'rgba(255,110,110,0)');
-  g.fillStyle = mid; g.fillRect(0, 0, w, h);
-  // 細い葉脈
-  for (const v of veinLines) {
-    g.strokeStyle = `rgba(70,0,10,${v.a})`;
-    g.lineWidth = v.w;
-    g.beginPath();
-    for (let y = 0; y <= h; y += 16) {
-      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 6;
-      y === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
-    }
-    g.stroke();
+// 4種類の花被片を横に並べたアトラス。花被片ごとに1列を使う
+// 0: 標準 / 1: 深紅で葉脈が強い / 2: 明るい緋色で基部に花粉 / 3: 盛りを過ぎ先端が褐変
+const ATLAS = 4, PW = 256, PH = 2048;
+const variants = [];
+for (let k = 0; k < ATLAS; k++) {
+  const veins = [];
+  for (let i = 0; i < 70; i++) {
+    veins.push({ x: rng(), w: rand(0.5, 1.6), a: rand(0.05, 0.16) * (k === 1 ? 1.6 : 1), ph: rand(0, 6.28), f: rand(2, 6) });
   }
-  // 斑点ノイズ
+  const spots = [];
+  for (let i = 0; i < (k === 3 ? 40 : 12); i++) spots.push({ x: rng(), y: rng(), r: rand(1, k === 3 ? 6 : 3), a: rand(0.1, 0.35) });
+  variants.push({ veins, spots });
+}
+const veinPath = (g, x0, v, h, amp) => {
+  g.beginPath();
+  for (let y = 0; y <= h; y += 16) {
+    const x = x0 + v.x * PW + Math.sin(y / h * v.f + v.ph) * amp;
+    y === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+  }
+  g.stroke();
+};
+const palettes = [
+  ['#a1061a', '#c20a22', '#cc0f26', '#b00a20', '#7c0814'],
+  ['#8a0416', '#a8071d', '#b50a22', '#98081c', '#640610'],
+  ['#b30a1c', '#d81828', '#de1e2c', '#c2121f', '#8a0a16'],
+  ['#9a0818', '#bb0c22', '#c0122a', '#8a1a1a', '#4a1a10'],
+];
+const petalMap = canvasTex(PW * ATLAS, PH, (g, w, h) => {
+  for (let k = 0; k < ATLAS; k++) {
+    const x0 = k * PW, pal = palettes[k], V = variants[k];
+    g.save(); g.beginPath(); g.rect(x0, 0, PW, h); g.clip();
+    const grd = g.createLinearGradient(0, 0, 0, h);
+    [0, 0.15, 0.55, 0.85, 1].forEach((t, i) => grd.addColorStop(t, pal[i]));
+    g.fillStyle = grd; g.fillRect(x0, 0, PW, h);
+    // 縁を少し濃く
+    const edge = g.createLinearGradient(x0, 0, x0 + PW, 0);
+    edge.addColorStop(0, 'rgba(90,0,12,0.38)'); edge.addColorStop(0.18, 'rgba(90,0,12,0)');
+    edge.addColorStop(0.82, 'rgba(90,0,12,0)'); edge.addColorStop(1, 'rgba(90,0,12,0.38)');
+    g.fillStyle = edge; g.fillRect(x0, 0, PW, h);
+    // 中肋はわずかに明るい
+    const mid = g.createLinearGradient(x0, 0, x0 + PW, 0);
+    mid.addColorStop(0.42, 'rgba(255,110,110,0)');
+    mid.addColorStop(0.5, `rgba(255,110,110,${k === 2 ? 0.32 : 0.2})`);
+    mid.addColorStop(0.58, 'rgba(255,110,110,0)');
+    g.fillStyle = mid; g.fillRect(x0, 0, PW, h);
+    // 葉脈 (濃い線と、その脇の明るいハイライト)
+    for (const v of V.veins) {
+      g.strokeStyle = `rgba(70,0,10,${v.a})`; g.lineWidth = v.w; veinPath(g, x0, v, h, 6);
+      g.strokeStyle = `rgba(255,120,120,${v.a * 0.35})`; g.lineWidth = v.w * 0.6;
+      veinPath(g, x0 + 1.5, v, h, 6);
+    }
+    // 色素のむら (長さ方向に伸びた斑)
+    for (let i = 0; i < 60; i++) {
+      g.fillStyle = rng() < 0.5 ? `rgba(255,60,70,${rand(0.03, 0.08)})` : `rgba(60,0,10,${rand(0.03, 0.09)})`;
+      g.beginPath(); g.ellipse(x0 + rng() * PW, rng() * h, rand(4, 18), rand(40, 160), 0, 0, 6.29); g.fill();
+    }
+    // 小さなしみ
+    for (const sp of V.spots) {
+      g.fillStyle = `rgba(${k === 3 ? '70,25,10' : '90,0,15'},${sp.a})`;
+      g.beginPath(); g.ellipse(x0 + sp.x * PW, sp.y * h, sp.r, sp.r * rand(1, 2.5), 0, 0, 6.29); g.fill();
+    }
+    // 基部 (キャンバス下端) は淡く緑がかる
+    const base = g.createLinearGradient(0, h, 0, h * 0.9);
+    base.addColorStop(0, 'rgba(210,150,120,0.55)'); base.addColorStop(1, 'rgba(210,150,120,0)');
+    g.fillStyle = base; g.fillRect(x0, h * 0.9, PW, h * 0.1);
+    // 花粉の粒が落ちた跡
+    const pollen = k === 2 ? 220 : 40;
+    for (let i = 0; i < pollen; i++) {
+      g.fillStyle = `rgba(240,${rand(170, 210)},80,${rand(0.3, 0.8)})`;
+      g.beginPath(); g.arc(x0 + rand(0.15, 0.85) * PW, h * (1 - Math.pow(rng(), 2) * 0.35), rand(0.8, 2), 0, 6.29); g.fill();
+    }
+    // 褐変: 先端 (キャンバス上端) と縁
+    if (k === 3) {
+      const tip = g.createLinearGradient(0, 0, 0, h * 0.25);
+      tip.addColorStop(0, 'rgba(60,30,15,0.85)'); tip.addColorStop(1, 'rgba(60,30,15,0)');
+      g.fillStyle = tip; g.fillRect(x0, 0, PW, h * 0.25);
+      for (let i = 0; i < 80; i++) {
+        const side = rng() < 0.5 ? x0 + rand(0, 14) : x0 + PW - rand(0, 14);
+        g.fillStyle = `rgba(70,35,15,${rand(0.15, 0.4)})`;
+        g.beginPath(); g.ellipse(side, rng() * h * 0.7, rand(2, 7), rand(10, 50), 0, 0, 6.29); g.fill();
+      }
+    }
+    g.restore();
+  }
   const img = g.getImageData(0, 0, w, h);
   for (let i = 0; i < img.data.length; i += 4) {
     const n = (rng() - 0.5) * 14;
@@ -244,23 +294,28 @@ const petalMap = canvasTex(512, 2048, (g, w, h) => {
   }
   g.putImageData(img, 0, 0);
 });
-const petalBump = canvasTex(512, 2048, (g, w, h) => {
+const petalBump = canvasTex(PW * ATLAS, PH, (g, w, h) => {
   g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
-  for (const v of veinLines) {
-    g.strokeStyle = `rgba(30,30,30,${v.a * 2.2})`;
-    g.lineWidth = v.w * 1.5;
-    g.beginPath();
-    for (let y = 0; y <= h; y += 16) {
-      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 6;
-      y === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+  for (let k = 0; k < ATLAS; k++) {
+    const x0 = k * PW;
+    for (const v of variants[k].veins) {
+      g.strokeStyle = `rgba(30,30,30,${v.a * 2.2})`; g.lineWidth = v.w * 1.5; veinPath(g, x0, v, h, 6);
     }
-    g.stroke();
+    const mid = g.createLinearGradient(x0, 0, x0 + PW, 0);
+    mid.addColorStop(0.44, 'rgba(0,0,0,0)'); mid.addColorStop(0.5, 'rgba(0,0,0,0.45)'); mid.addColorStop(0.56, 'rgba(0,0,0,0)');
+    g.fillStyle = mid; g.fillRect(x0, 0, PW, h);
+    // 横方向の細かなしわ
+    for (let i = 0; i < 140; i++) {
+      const y = rng() * h;
+      g.strokeStyle = `rgba(${rng() < 0.5 ? '40,40,40' : '210,210,210'},${rand(0.05, 0.15)})`;
+      g.lineWidth = rand(0.5, 1.5);
+      g.beginPath(); g.moveTo(x0 + rng() * PW * 0.3, y); g.quadraticCurveTo(x0 + PW / 2, y + rand(-10, 10), x0 + PW - rng() * PW * 0.3, y + rand(-6, 6)); g.stroke();
+    }
+    for (const sp of variants[k].spots) {
+      g.fillStyle = `rgba(30,30,30,${sp.a})`;
+      g.beginPath(); g.arc(x0 + sp.x * PW, sp.y * h, sp.r, 0, 6.29); g.fill();
+    }
   }
-  const mid = g.createLinearGradient(0, 0, w, 0);
-  mid.addColorStop(0.44, 'rgba(0,0,0,0)');
-  mid.addColorStop(0.5, 'rgba(0,0,0,0.45)');
-  mid.addColorStop(0.56, 'rgba(0,0,0,0)');
-  g.fillStyle = mid; g.fillRect(0, 0, w, h);
   // 表皮細胞の細かな凹凸 (きらめき)
   const img = g.getImageData(0, 0, w, h);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
@@ -272,7 +327,9 @@ const petalBump = canvasTex(512, 2048, (g, w, h) => {
   g.putImageData(img, 0, 0);
 }, false);
 
-const stemMap = canvasTex(128, 512, (g, w, h) => {
+const stemScars = [];
+for (let i = 0; i < 9; i++) stemScars.push({ x: rng(), y: rand(0.05, 0.95), w: rand(2, 5), l: rand(6, 30) });
+const stemMap = canvasTex(128, 1024, (g, w, h) => {
   g.fillStyle = '#4f6a2a'; g.fillRect(0, 0, w, h);
   for (let i = 0; i < 70; i++) {
     const l = rand(-18, 14);
@@ -289,11 +346,28 @@ const stemMap = canvasTex(128, 512, (g, w, h) => {
     g.fillStyle = `rgba(190,205,180,${rand(0.04, 0.12)})`;
     g.beginPath(); g.ellipse(rng() * w, rng() * h, rand(4, 14), rand(20, 70), 0, 0, 6.29); g.fill();
   }
+  // 小さな傷 (褐色の筋)
+  for (const sc of stemScars) {
+    g.fillStyle = 'rgba(120,95,50,0.6)';
+    g.beginPath(); g.ellipse(sc.x * w, sc.y * h, sc.w / 2, sc.l / 2, 0, 0, 6.29); g.fill();
+    g.fillStyle = 'rgba(60,45,20,0.5)';
+    g.fillRect(sc.x * w - 0.5, sc.y * h - sc.l * 0.35, 1, sc.l * 0.7);
+  }
   // 基部は赤紫がかる
   const grd = g.createLinearGradient(0, h, 0, 0);
-  grd.addColorStop(0, 'rgba(90,40,30,0.55)');
-  grd.addColorStop(0.08, 'rgba(90,40,30,0)');
+  grd.addColorStop(0, 'rgba(90,40,30,0.6)');
+  grd.addColorStop(0.06, 'rgba(90,40,30,0)');
   g.fillStyle = grd; g.fillRect(0, 0, w, h);
+  // 根元の土汚れ
+  for (let i = 0; i < 500; i++) {
+    const y = h - Math.pow(rng(), 3) * h * 0.06;
+    g.fillStyle = `rgba(${rand(60, 100)},${rand(45, 70)},${rand(25, 40)},${rand(0.3, 0.8)})`;
+    g.beginPath(); g.arc(rng() * w, y, rand(0.5, 2.2), 0, 6.29); g.fill();
+  }
+  // 花序の直下は黄緑
+  const topg = g.createLinearGradient(0, 0, 0, h * 0.05);
+  topg.addColorStop(0, 'rgba(150,180,60,0.45)'); topg.addColorStop(1, 'rgba(150,180,60,0)');
+  g.fillStyle = topg; g.fillRect(0, 0, w, h * 0.05);
 });
 
 const pollenMap = canvasTex(128, 128, (g, w, h) => {
@@ -315,11 +389,33 @@ const bractMap = canvasTex(64, 256, (g, w, h) => {
   grd.addColorStop(0, 'rgba(70,45,20,0.45)'); grd.addColorStop(0.4, 'rgba(70,45,20,0)');
   g.fillStyle = grd; g.fillRect(0, 0, w, h);
 });
-const stemBump = canvasTex(128, 512, (g, w, h) => {
+const bractAlpha = canvasTex(64, 256, (g, w, h) => {
+  g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
+  g.fillStyle = '#fff';
+  g.beginPath();
+  g.moveTo(w * 0.5, 2);
+  for (let y = 0; y <= h; y += 6) g.lineTo(w * (0.5 - 0.5 * Math.min(1, y / (h * 0.4))) + rand(0, 6), y);
+  for (let y = h; y >= 0; y -= 6) g.lineTo(w * (0.5 + 0.5 * Math.min(1, y / (h * 0.4))) - rand(0, 6), y);
+  g.fill();
+  // 乾いて裂けた穴
+  g.fillStyle = '#000';
+  for (let i = 0; i < 6; i++) {
+    g.beginPath(); g.ellipse(rng() * w, rand(0.1, 0.6) * h, rand(1, 3), rand(4, 14), 0, 0, 6.29); g.fill();
+  }
+}, false);
+const stemBump = canvasTex(128, 1024, (g, w, h) => {
   g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
   for (let i = 0; i < 40; i++) {
     g.fillStyle = `rgba(${rng() < 0.5 ? '40,40,40' : '200,200,200'},${rand(0.1, 0.3)})`;
     g.fillRect(rng() * w, 0, rand(1, 3), h);
+  }
+  for (const sc of stemScars) {
+    g.fillStyle = 'rgba(30,30,30,0.6)';
+    g.beginPath(); g.ellipse(sc.x * w, sc.y * h, sc.w / 2, sc.l / 2, 0, 0, 6.29); g.fill();
+  }
+  for (let i = 0; i < 300; i++) {
+    g.fillStyle = `rgba(220,220,220,${rand(0.3, 0.7)})`;
+    g.beginPath(); g.arc(rng() * w, h - Math.pow(rng(), 3) * h * 0.06, rand(0.5, 2), 0, 6.29); g.fill();
   }
 }, false);
 
@@ -363,17 +459,18 @@ const greenMap = canvasTex(256, 256, (g, w, h) => {
 });
 
 // 花弁の光沢ムラ: 葉脈の溝は少し艶があり、面は細かくざらつく
-const petalRough = canvasTex(256, 1024, (g, w, h) => {
+const petalRough = canvasTex(PW * ATLAS, 1024, (g, w, h) => {
   g.fillStyle = '#c8c8c8'; g.fillRect(0, 0, w, h);
-  for (const v of veinLines) {
-    g.strokeStyle = `rgba(90,90,90,${v.a * 2})`;
-    g.lineWidth = v.w;
-    g.beginPath();
-    for (let y = 0; y <= h; y += 16) {
-      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 3;
-      y === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+  for (let k = 0; k < ATLAS; k++) {
+    for (const v of variants[k].veins) {
+      g.strokeStyle = `rgba(90,90,90,${v.a * 2})`; g.lineWidth = v.w; veinPath(g, k * PW, v, h, 3);
     }
-    g.stroke();
+    // 褐変した部分は乾いて艶消し
+    if (k === 3) {
+      const tip = g.createLinearGradient(0, 0, 0, h * 0.25);
+      tip.addColorStop(0, 'rgba(255,255,255,0.7)'); tip.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = tip; g.fillRect(k * PW, 0, PW, h * 0.25);
+    }
   }
   const img = g.getImageData(0, 0, w, h);
   for (let i = 0; i < img.data.length; i += 4) {
@@ -395,10 +492,10 @@ const stemRough = canvasTex(64, 256, (g, w, h) => {
 // ---------- マテリアル ----------
 const petalMat = new THREE.MeshPhysicalMaterial({
   map: petalMap, bumpMap: petalBump, bumpScale: 1.4, vertexColors: true,
-  roughnessMap: petalRough, roughness: 0.68, sheen: 1, sheenRoughness: 0.32, sheenColor: new THREE.Color(0xff3b3b),
+  roughnessMap: petalRough, roughness: 0.68, sheen: 1, sheenRoughness: 0.32, sheenColor: new THREE.Color(0xff3b3b), sheenColorMap: petalMap,
   clearcoat: 0.12, clearcoatRoughness: 0.45, side: THREE.DoubleSide, envMapIntensity: 0.9,
 });
-addTranslucency(petalMat, 0.45, 0xff1a1a);
+addTranslucency(petalMat, 0.36, 0xff1a1a, true);
 
 const stamenMat = new THREE.MeshPhysicalMaterial({
   map: filamentMap, bumpMap: filamentMap, bumpScale: 0.6, roughness: 0.32, clearcoat: 0.35, clearcoatRoughness: 0.3,
@@ -422,7 +519,7 @@ addTranslucency(stemMat, 0.12, 0xb8ff70);
 const ovaryMat = new THREE.MeshPhysicalMaterial({ map: greenMap, bumpMap: greenMap, bumpScale: 0.8, color: 0xd8e6c0, roughness: 0.62, clearcoat: 0.08, clearcoatRoughness: 0.6,
   sheen: 0.3, sheenColor: new THREE.Color(0xc8d8a0) });
 addTranslucency(ovaryMat, 0.15, 0xc8ff80);
-const bractMat = new THREE.MeshStandardMaterial({ map: bractMap, roughness: 0.9, side: THREE.DoubleSide });
+const bractMat = new THREE.MeshStandardMaterial({ map: bractMap, alphaMap: bractAlpha, alphaTest: 0.5, roughness: 0.9, side: THREE.DoubleSide });
 addTranslucency(bractMat, 0.4, 0xffc070);
 
 // ---------- ジオメトリ生成 ----------
@@ -432,6 +529,7 @@ const smooth = (a, b, x) => { const t = THREE.MathUtils.clamp((x - a) / (b - a),
 function makeTepal(o) {
   const { length, width, rise, curl, wave, waveFreq, twist, cup, segU, segV, phaseA, phaseB } = o;
   const tone = o.tone ?? 1;
+  const cols = o.atlas === undefined ? 1 : ATLAS, col0 = o.atlas ?? 0;
   const pos = [], nor = [], uv = [], idx = [], col = [];
   const ds = length / segU;
   const p = new THREE.Vector3();
@@ -465,7 +563,7 @@ function makeTepal(o) {
         .addScaledVector(T[i], ruffle * 0.25 * s);
       pos.push(v3.x, v3.y, v3.z);
       nor.push(0, 0, 0);
-      uv.push(j / segV, u);
+      uv.push((col0 + j / segV) / cols, u);
       // 基部はやや淡く、先端と縁はわずかに濃い
       const k = tone * (1 - 0.22 * smooth(0.82, 1, u) - 0.12 * smooth(0.8, 1, as)) ;
       const pale = 0.35 * (1 - smooth(0.0, 0.1, u));
@@ -595,6 +693,7 @@ function buildFlower(G, F, A, detail) {
       rise: rand(0.7, 1.0), curl: rand(3.6, 4.5),
       wave: rand(0.07, 0.12), waveFreq: rand(6.5, 9.5), twist: rand(-0.5, 0.5),
       cup: rand(0.18, 0.32), segU, segV, phaseA: rand(0, 6.28), phaseB: rand(0, 6.28), tone: rand(0.9, 1.06),
+      atlas: rng() < 0.12 ? 3 : Math.floor(rng() * 3),
     });
     m4.makeBasis(X, A, Z).setPosition(F.clone().addScaledVector(A, 0.05).addScaledVector(X, 0.06));
     G.petal.push(tep.applyMatrix4(m4));
@@ -774,6 +873,7 @@ function toonFor(mat) {
   if (!toonMats.has(mat)) {
     const t = new THREE.MeshToonMaterial({
       map: mat.map, color: mat.color, vertexColors: mat.vertexColors, side: mat.side, gradientMap: toonRamp,
+      alphaMap: mat.alphaMap, alphaTest: mat.alphaTest,
     });
     toonMats.set(mat, t);
   }
@@ -783,9 +883,10 @@ function normalFor(mat) {
   if (!normalMats.has(mat)) {
     normalMats.set(mat, new THREE.ShaderMaterial({
       side: THREE.DoubleSide,
-      uniforms: { weight: { value: inkWeights.get(mat) ?? 1 } },
-      vertexShader: `varying vec3 vN; void main() { vN = normalize(normalMatrix * normal); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: `uniform float weight; varying vec3 vN; void main() {
+      uniforms: { weight: { value: inkWeights.get(mat) ?? 1 }, alphaMap: { value: mat.alphaMap }, useAlpha: { value: mat.alphaMap ? 1 : 0 } },
+      vertexShader: `varying vec3 vN; varying vec2 vUv2; void main() { vN = normalize(normalMatrix * normal); vUv2 = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `uniform float weight, useAlpha; uniform sampler2D alphaMap; varying vec3 vN; varying vec2 vUv2; void main() {
+        if (useAlpha > 0.5 && texture2D(alphaMap, vUv2).g < 0.5) discard;
         vec3 n = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
         gl_FragColor = vec4(n * 0.5 + 0.5, weight); }`,
     }));
@@ -847,9 +948,18 @@ const inkQuad = new FullScreenQuad(new THREE.ShaderMaterial({
       vec4 c = texture2D(tColor, vUv);
       // 彩度をやや上げ、紙の繊維で色をにじませる
       float l = dot(c.rgb, vec3(0.299, 0.587, 0.114));
-      vec3 col = mix(vec3(l), c.rgb, 1.25) * (0.9 + 0.2 * paper);
+      float gran = texture2D(tPaper, vUv * resolution / 160.0 + 0.37).r;
+      vec3 col = mix(vec3(l), c.rgb, 1.25) * (0.86 + 0.16 * paper + 0.12 * gran);
+      // 暗い面に斜線、さらに暗い面には交差線
+      vec2 fc = gl_FragCoord.xy / lineScale;
+      float v = max(c.r, max(c.g, c.b));
+      float h1 = 1.0 - smoothstep(0.0, 0.18, abs(fract((fc.x + fc.y) / 6.0) - 0.5) * 2.0 - 0.75);
+      float h2 = 1.0 - smoothstep(0.0, 0.18, abs(fract((fc.x - fc.y) / 6.0) - 0.5) * 2.0 - 0.75);
+      float hatch = h1 * (1.0 - smoothstep(0.16, 0.26, v)) + h2 * (1.0 - smoothstep(0.05, 0.1, v));
+      hatch *= c.a * (0.7 + 0.3 * paper);
       vec3 bg = paperColor * (0.9 + 0.2 * paper);
       vec3 outc = mix(bg, col, c.a);
+      outc = mix(outc, inkColor * 1.3, clamp(hatch, 0.0, 1.0) * 0.35);
       outc = mix(outc, inkColor, clamp(ink, 0.0, 1.0) * 0.92);
       gl_FragColor = vec4(outc, 1.0);
       #include <colorspace_fragment>
