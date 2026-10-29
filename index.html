@@ -118,9 +118,9 @@ const sun = new THREE.DirectionalLight(sunColor, 2.6);
 sun.position.copy(sunDir).multiplyScalar(80);
 sun.target.position.set(0, 38, 0);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(4096, 4096);
 const sc = sun.shadow.camera;
-sc.left = -14; sc.right = 14; sc.top = 14; sc.bottom = -14; sc.near = 20; sc.far = 160;
+sc.left = -12; sc.right = 12; sc.top = 12; sc.bottom = -12; sc.near = 20; sc.far = 160;
 sun.shadow.bias = -0.0003;
 sun.shadow.normalBias = 0.02;
 sun.shadow.radius = 4;
@@ -129,6 +129,11 @@ scene.add(sun, sun.target);
 const fill = new THREE.DirectionalLight(0xffffff, 1.0);
 fill.position.set(40, 50, 60);
 scene.add(fill);
+
+// 後方からの輪郭光で雄しべの細い線を際立たせる
+const rim = new THREE.DirectionalLight(0xffd9c4, 1.4);
+rim.position.set(30, 55, -50);
+scene.add(rim);
 
 // ---------- 薄い花弁の透過光 (サブサーフェスの近似) ----------
 const transUniforms = {
@@ -171,10 +176,10 @@ function canvasTex(w, h, draw, srgb = true) {
 
 // 花被片: x = 幅方向, y = 長さ方向 (上が先端, 下が基部)
 const veinLines = [];
-for (let i = 0; i < 46; i++) {
+for (let i = 0; i < 90; i++) {
   veinLines.push({ x: rng(), w: rand(0.6, 1.8), a: rand(0.05, 0.16), ph: rand(0, 6.28), f: rand(2, 6) });
 }
-const petalMap = canvasTex(256, 1024, (g, w, h) => {
+const petalMap = canvasTex(512, 2048, (g, w, h) => {
   const grd = g.createLinearGradient(0, 0, 0, h);
   grd.addColorStop(0.0, '#a1061a');
   grd.addColorStop(0.15, '#c20a22');
@@ -201,7 +206,7 @@ const petalMap = canvasTex(256, 1024, (g, w, h) => {
     g.lineWidth = v.w;
     g.beginPath();
     for (let y = 0; y <= h; y += 16) {
-      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 3;
+      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 6;
       y === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
     }
     g.stroke();
@@ -214,14 +219,14 @@ const petalMap = canvasTex(256, 1024, (g, w, h) => {
   }
   g.putImageData(img, 0, 0);
 });
-const petalBump = canvasTex(256, 1024, (g, w, h) => {
+const petalBump = canvasTex(512, 2048, (g, w, h) => {
   g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
   for (const v of veinLines) {
     g.strokeStyle = `rgba(30,30,30,${v.a * 2.2})`;
     g.lineWidth = v.w * 1.5;
     g.beginPath();
     for (let y = 0; y <= h; y += 16) {
-      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 3;
+      const x = v.x * w + Math.sin(y / h * v.f + v.ph) * 6;
       y === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
     }
     g.stroke();
@@ -231,10 +236,19 @@ const petalBump = canvasTex(256, 1024, (g, w, h) => {
   mid.addColorStop(0.5, 'rgba(0,0,0,0.45)');
   mid.addColorStop(0.56, 'rgba(0,0,0,0)');
   g.fillStyle = mid; g.fillRect(0, 0, w, h);
+  // 表皮細胞の細かな凹凸 (きらめき)
+  const img = g.getImageData(0, 0, w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4;
+    const cell = ((x >> 1) * 7 + (y >> 3) * 13) % 5 === 0 ? 10 : 0;
+    const n = (rng() - 0.5) * 18 + cell;
+    img.data[i] += n; img.data[i + 1] += n; img.data[i + 2] += n;
+  }
+  g.putImageData(img, 0, 0);
 }, false);
 
 const stemMap = canvasTex(128, 512, (g, w, h) => {
-  g.fillStyle = '#62763a'; g.fillRect(0, 0, w, h);
+  g.fillStyle = '#4f6a2a'; g.fillRect(0, 0, w, h);
   for (let i = 0; i < 70; i++) {
     const l = rand(-18, 14);
     g.fillStyle = `rgba(${l > 0 ? 200 : 20},${l > 0 ? 230 : 50},${l > 0 ? 160 : 10},${Math.abs(l) / 100})`;
@@ -247,9 +261,36 @@ const stemMap = canvasTex(128, 512, (g, w, h) => {
   g.fillStyle = grd; g.fillRect(0, 0, w, h);
 });
 
+const pollenMap = canvasTex(128, 128, (g, w, h) => {
+  g.fillStyle = '#b48a34'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 900; i++) {
+    g.fillStyle = rng() < 0.6 ? `rgba(235,190,80,${rand(0.3, 0.8)})` : `rgba(110,70,20,${rand(0.2, 0.5)})`;
+    g.beginPath(); g.arc(rng() * w, rng() * h, rand(0.6, 1.8), 0, 6.29); g.fill();
+  }
+});
+const bractMap = canvasTex(64, 256, (g, w, h) => {
+  g.fillStyle = '#a78256'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 26; i++) {
+    g.strokeStyle = `rgba(${rng() < 0.5 ? '90,60,30' : '210,180,140'},${rand(0.15, 0.4)})`;
+    g.lineWidth = rand(0.5, 1.5);
+    const x = rng() * w;
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x + rand(-3, 3), h); g.stroke();
+  }
+  const grd = g.createLinearGradient(0, 0, 0, h);
+  grd.addColorStop(0, 'rgba(70,45,20,0.45)'); grd.addColorStop(0.4, 'rgba(70,45,20,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, w, h);
+});
+const stemBump = canvasTex(128, 512, (g, w, h) => {
+  g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
+  for (let i = 0; i < 40; i++) {
+    g.fillStyle = `rgba(${rng() < 0.5 ? '40,40,40' : '200,200,200'},${rand(0.1, 0.3)})`;
+    g.fillRect(rng() * w, 0, rand(1, 3), h);
+  }
+}, false);
+
 // ---------- マテリアル ----------
 const petalMat = new THREE.MeshPhysicalMaterial({
-  map: petalMap, bumpMap: petalBump, bumpScale: 1.2,
+  map: petalMap, bumpMap: petalBump, bumpScale: 1.4, vertexColors: true,
   roughness: 0.46, sheen: 1, sheenRoughness: 0.32, sheenColor: new THREE.Color(0xff3b3b),
   clearcoat: 0.12, clearcoatRoughness: 0.45, side: THREE.DoubleSide, envMapIntensity: 0.9,
 });
@@ -265,16 +306,19 @@ const styleMat = stamenMat.clone();
 styleMat.color.set(0xe02a30);
 addTranslucency(styleMat, 0.55, 0xff2020);
 
-const antherMat = new THREE.MeshStandardMaterial({ color: 0xa8823a, roughness: 0.8 });
-const stigmaMat = new THREE.MeshStandardMaterial({ color: 0xf0d6c8, roughness: 0.6 });
+const antherMat = new THREE.MeshPhysicalMaterial({ map: pollenMap, bumpMap: pollenMap, bumpScale: 2, roughness: 0.85, sheen: 0.5, sheenColor: new THREE.Color(0xffd27a) });
+const stigmaMat = new THREE.MeshPhysicalMaterial({ color: 0xf2c8c0, roughness: 0.5, sheen: 1, sheenColor: new THREE.Color(0xffffff) });
 
 const stemMat = new THREE.MeshPhysicalMaterial({
-  map: stemMap, roughness: 0.42, clearcoat: 0.45, clearcoatRoughness: 0.35, envMapIntensity: 0.8,
+  map: stemMap, bumpMap: stemBump, bumpScale: 0.8, roughness: 0.5, clearcoat: 0.25, clearcoatRoughness: 0.45,
+  sheen: 0.15, sheenColor: new THREE.Color(0xc8d4b8), sheenRoughness: 0.6, envMapIntensity: 0.7,
 });
 addTranslucency(stemMat, 0.12, 0xb8ff70);
 
-const ovaryMat = new THREE.MeshPhysicalMaterial({ color: 0x8aa63a, roughness: 0.5, clearcoat: 0.3 });
-const bractMat = new THREE.MeshStandardMaterial({ color: 0x9a7448, roughness: 0.95, side: THREE.DoubleSide });
+const ovaryMat = new THREE.MeshPhysicalMaterial({ color: 0x5f7d24, roughness: 0.62, clearcoat: 0.08, clearcoatRoughness: 0.6,
+  sheen: 0.3, sheenColor: new THREE.Color(0xc8d8a0) });
+addTranslucency(ovaryMat, 0.15, 0xc8ff80);
+const bractMat = new THREE.MeshStandardMaterial({ map: bractMap, roughness: 0.9, side: THREE.DoubleSide });
 addTranslucency(bractMat, 0.4, 0xffc070);
 
 // ---------- ジオメトリ生成 ----------
@@ -283,7 +327,8 @@ const smooth = (a, b, x) => { const t = THREE.MathUtils.clamp((x - a) / (b - a),
 // 花被片 (ローカル座標: +X 外向き, +Y 花の軸, Z 幅方向)
 function makeTepal(o) {
   const { length, width, rise, curl, wave, waveFreq, twist, cup, segU, segV, phaseA, phaseB } = o;
-  const pos = [], nor = [], uv = [], idx = [];
+  const tone = o.tone ?? 1;
+  const pos = [], nor = [], uv = [], idx = [], col = [];
   const ds = length / segU;
   const p = new THREE.Vector3();
   const C = [], T = [];
@@ -304,14 +349,23 @@ function makeTepal(o) {
     for (let j = 0; j <= segV; j++) {
       const s = j / segV * 2 - 1; // -1..1
       const as = Math.abs(s);
-      const ruffle = amp * Math.pow(as, 1.6) *
-        Math.sin(u * waveFreq * Math.PI * 2 + (s > 0 ? phaseA : phaseB) + as * 0.8);
-      const curve = cup * w * s * s - 0.06 * w * (1 - as);
+      const ph = s > 0 ? phaseA : phaseB;
+      // 縁の縮れ: 主波 + 細かい不規則な波
+      const ruffle = amp * Math.pow(as, 1.6) * (
+        Math.sin(u * waveFreq * Math.PI * 2 + ph + as * 0.8) +
+        0.45 * Math.sin(u * waveFreq * 2.37 * Math.PI * 2 + ph * 1.7) * smooth(0.5, 1, as) +
+        0.08 * Math.sin(u * waveFreq * 5.1 * Math.PI * 2 + ph * 2.3) * smooth(0.75, 1, as));
+      // 浅い樋状の断面と中肋の溝
+      const curve = cup * w * s * s - 0.06 * w * (1 - as) - 0.035 * w * Math.exp(-(s * s) / 0.02);
       v3.copy(C[i]).addScaledVector(B, s * w * 0.5).addScaledVector(N, curve + ruffle)
         .addScaledVector(T[i], ruffle * 0.25 * s);
       pos.push(v3.x, v3.y, v3.z);
       nor.push(0, 0, 0);
       uv.push(j / segV, u);
+      // 基部はやや淡く、先端と縁はわずかに濃い
+      const k = tone * (1 - 0.22 * smooth(0.82, 1, u) - 0.12 * smooth(0.8, 1, as)) ;
+      const pale = 0.35 * (1 - smooth(0.0, 0.1, u));
+      col.push(k + pale * 0.3, k * (1 + pale * 1.6), k * (1 + pale * 1.2));
     }
   }
   const row = segV + 1;
@@ -323,6 +377,7 @@ function makeTepal(o) {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
@@ -359,7 +414,37 @@ function taperTube(points, r0, r1, tubular, radial) {
   return { geo: g, curve };
 }
 
-const sphereHi = new THREE.SphereGeometry(1, 14, 10);
+const sphereHi = new THREE.SphereGeometry(1, 20, 14);
+
+// 三日月形に反った丁字着の葯 (ローカル: 長軸 Z)
+function makeAnther(len) {
+  const g = new THREE.SphereGeometry(1, 18, 12);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    // 縦の溝 (2つの花粉嚢)
+    const groove = 1 - 0.22 * Math.exp(-(x * x) / 0.04) * Math.max(0, y);
+    const zz = z * len * 0.5;
+    p.setXYZ(i, x * 0.05 * groove, y * 0.045 - 1.3 * zz * zz, zz);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
+// 3室の子房 (縦に3本の溝)
+function makeOvary() {
+  const g = new THREE.SphereGeometry(1, 24, 16);
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const a = Math.atan2(z, x);
+    const r = 1 + 0.13 * Math.cos(a * 3);
+    p.setXYZ(i, x * r * 0.18, y * 0.3, z * r * 0.18);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+const ovaryGeo = makeOvary();
 const sphereLo = new THREE.SphereGeometry(1, 8, 6);
 const m4 = new THREE.Matrix4();
 
@@ -390,10 +475,10 @@ function filamentPoints(start, dir0, target, len, bend, steps) {
 function buildFlower(G, F, A, detail) {
   const e1 = perpendicular(A);
   const e2 = new THREE.Vector3().crossVectors(A, e1).normalize();
-  const segU = detail > 0.7 ? 44 : 22, segV = detail > 0.7 ? 8 : 4;
+  const segU = detail > 0.7 ? 72 : 22, segV = detail > 0.7 ? 14 : 4;
 
   // 子房
-  G.green.push(ellipsoid(detail > 0.7 ? sphereHi : sphereLo, F.clone().addScaledVector(A, -0.12), e1, A, e2, 0.17, 0.3, 0.17));
+  G.green.push(ellipsoid(ovaryGeo, F.clone().addScaledVector(A, -0.12), e1, A, e2, 1, 1, 1));
 
   // 花被片 ×6
   const rot0 = rand(0, Math.PI * 2);
@@ -405,7 +490,7 @@ function buildFlower(G, F, A, detail) {
       length: rand(3.8, 4.6), width: rand(0.36, 0.46),
       rise: rand(0.7, 1.0), curl: rand(3.6, 4.5),
       wave: rand(0.07, 0.12), waveFreq: rand(6.5, 9.5), twist: rand(-0.5, 0.5),
-      cup: rand(0.18, 0.32), segU, segV, phaseA: rand(0, 6.28), phaseB: rand(0, 6.28),
+      cup: rand(0.18, 0.32), segU, segV, phaseA: rand(0, 6.28), phaseB: rand(0, 6.28), tone: rand(0.9, 1.06),
     });
     m4.makeBasis(X, A, Z).setPosition(F.clone().addScaledVector(A, 0.05).addScaledVector(X, 0.06));
     G.petal.push(tep.applyMatrix4(m4));
@@ -415,7 +500,7 @@ function buildFlower(G, F, A, detail) {
   const horiz = new THREE.Vector3(A.x, 0, A.z).normalize();
   const lateral = new THREE.Vector3().crossVectors(UP, horiz).normalize();
   const target = UP.clone().addScaledVector(horiz, 0.35).normalize();
-  const tub = detail > 0.7 ? 34 : 14, rad = detail > 0.7 ? 6 : 4;
+  const tub = detail > 0.7 ? 56 : 14, rad = detail > 0.7 ? 8 : 4;
   for (let i = 0; i <= 6; i++) {
     const isStyle = i === 6;
     const psi = i / 6 * Math.PI * 2 + rand(-0.3, 0.3);
@@ -431,14 +516,18 @@ function buildFlower(G, F, A, detail) {
     const tip = pts[pts.length - 1];
     if (isStyle) {
       G.style.push(geo);
-      G.stigma.push(ellipsoid(sphereLo, tip, e1, dir, e2, 0.035, 0.035, 0.035));
+      for (let l = 0; l < 3; l++) {
+        const a = l / 3 * Math.PI * 2;
+        const off = e1.clone().multiplyScalar(Math.cos(a)).addScaledVector(e2, Math.sin(a));
+        G.stigma.push(ellipsoid(sphereLo, tip.clone().addScaledVector(off, 0.018).addScaledVector(dir, 0.01), e1, dir, e2, 0.022, 0.03, 0.022));
+      }
     } else {
       G.stamen.push(geo);
       // 丁字着の葯 (糸に対して横向き)
       const z = new THREE.Vector3().crossVectors(dir, radial).normalize();
       const x = new THREE.Vector3().crossVectors(dir, z).normalize();
-      G.anther.push(ellipsoid(detail > 0.7 ? sphereHi : sphereLo, tip.clone().addScaledVector(dir, 0.03),
-        x, dir, z, 0.055, 0.06, rand(0.16, 0.21)));
+      m4.makeBasis(x, dir, z).setPosition(tip.clone().addScaledVector(dir, 0.035));
+      G.anther.push(makeAnther(rand(0.34, 0.42)).applyMatrix4(m4));
     }
   }
 }
@@ -452,19 +541,23 @@ function buildPlant(height, detail, seedLean) {
     const t = i / 6;
     pts.push(new THREE.Vector3(lean.x * t * t + Math.sin(t * 3 + height) * 0.3, height * t, lean.z * t * t));
   }
-  const { geo: stemGeo } = taperTube(pts, 0.34, 0.24, detail > 0.7 ? 60 : 20, detail > 0.7 ? 12 : 6);
+  const { geo: stemGeo } = taperTube(pts, 0.34, 0.24, detail > 0.7 ? 80 : 20, detail > 0.7 ? 20 : 6);
   G.stem.push(stemGeo);
   const top = pts[6];
   G.green.push(ellipsoid(sphereLo, top.clone().addScaledVector(UP, 0.1), new THREE.Vector3(1, 0, 0), UP, new THREE.Vector3(0, 0, 1), 0.3, 0.28, 0.3));
 
-  // 総苞片 (乾いた褐色)
-  for (let i = 0; i < 2; i++) {
-    const phi = rand(0, Math.PI * 2) + i * Math.PI;
+  // 総苞片 (乾いた褐色) 2枚と、糸状の小苞片
+  const bractPhi = rand(0, Math.PI * 2);
+  for (let i = 0; i < 7; i++) {
+    const big = i < 2;
+    const phi = big ? bractPhi + i * Math.PI : rand(0, Math.PI * 2);
     const X = new THREE.Vector3(Math.cos(phi), 0, Math.sin(phi));
     const Z = new THREE.Vector3().crossVectors(X, UP);
     const b = makeTepal({
-      length: rand(1.8, 2.6), width: 0.32, rise: rand(-1.1, -0.6), curl: rand(0.2, 0.6),
-      wave: 0.05, waveFreq: 3, twist: rand(-0.8, 0.8), cup: 0.4, segU: 14, segV: 4, phaseA: 0, phaseB: 1,
+      length: big ? rand(1.8, 2.6) : rand(0.6, 1.1), width: big ? 0.32 : 0.06,
+      rise: big ? rand(-1.1, -0.6) : rand(-0.4, 0.6), curl: rand(0.2, 0.9),
+      wave: big ? 0.05 : 0.01, waveFreq: 3, twist: rand(-0.8, 0.8), cup: 0.4,
+      segU: big ? 24 : 8, segV: big ? 6 : 2, phaseA: rand(0, 6), phaseB: rand(0, 6),
     });
     m4.makeBasis(X, UP, Z).setPosition(top.clone().addScaledVector(X, 0.2).addScaledVector(UP, -0.1));
     G.bract.push(b.applyMatrix4(m4));
@@ -487,7 +580,7 @@ function buildPlant(height, detail, seedLean) {
       F.clone().addScaledVector(A, -0.35),
       F.clone().addScaledVector(A, -0.1),
     ];
-    G.green.push(taperTube(ped, 0.08, 0.065, detail > 0.7 ? 16 : 6, detail > 0.7 ? 6 : 4).geo);
+    G.green.push(taperTube(ped, 0.085, 0.06, detail > 0.7 ? 24 : 6, detail > 0.7 ? 8 : 4).geo);
     buildFlower(G, F, A, detail);
   }
 
