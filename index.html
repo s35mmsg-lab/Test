@@ -765,7 +765,7 @@ function buildFlower(G, F, A, detail) {
   }
 }
 
-function buildPlant(height, detail, seedLean) {
+function buildPlant(height, detail, seedLean, flowers = 6 + Math.floor(rng() * 5)) {
   const G = { petal: [], stamen: [], style: [], anther: [], stigma: [], green: [], stem: [], bract: [] };
   // 花茎 (葉はない)
   const lean = new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)).normalize().multiplyScalar(height * seedLean);
@@ -797,13 +797,14 @@ function buildPlant(height, detail, seedLean) {
   }
 
   // 散形花序
-  // 1本の花茎に6輪
-  const n = 6;
+  // 1本の花茎に6〜10輪 (各花の花被片は6枚)
+  const n = flowers;
   const rot = rand(0, Math.PI * 2);
   for (let k = 0; k < n; k++) {
     const phi = rot + k / n * Math.PI * 2 + rand(-0.25, 0.25);
     const out = new THREE.Vector3(Math.cos(phi), 0, Math.sin(phi));
-    const tilt = rand(1.35, 1.62);
+    // 輪数が多いほど上向き・下向きの花が混ざり、球状にまとまる
+    const tilt = n > 7 ? (k % 2 ? rand(1.05, 1.35) : rand(1.4, 1.65)) : rand(1.35, 1.62);
     const A = out.clone().multiplyScalar(Math.sin(tilt)).addScaledVector(UP, Math.cos(tilt)).normalize();
     const pl = rand(2.2, 3.0);
     const F = top.clone().addScaledVector(UP, 0.5).addScaledVector(out, 0.35).addScaledVector(A, pl);
@@ -840,7 +841,7 @@ function buildPlant(height, detail, seedLean) {
 }
 
 // ---------- 彼岸花 (一本) ----------
-const lily = buildPlant(42, 1, 0.03);
+const lily = buildPlant(42, 1, 0.03, 10);
 lily.name = 'Lycoris_radiata';
 scene.add(lily);
 const top = lily.userData.top;
